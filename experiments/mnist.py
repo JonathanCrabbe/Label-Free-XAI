@@ -4,13 +4,16 @@ from torchvision import transforms
 from torch.utils.data import DataLoader, random_split
 from models.images import EncoderMnist, DecoderMnist, train_epoch, test_epoch
 from pathlib import Path
+from captum.attr import IntegratedGradients
+from captum.attr._utils.visualization import visualize_image_attr
+from explanations.features import AuxiliaryFunction
 
 
 def denoiser_mnist():
     data_dir = Path.cwd()/"data/mnist"
 
     train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
-    test_dataset  = torchvision.datasets.MNIST(data_dir, train=False, download=True)
+    test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
 
     train_transform = transforms.Compose([
     transforms.ToTensor(),
@@ -46,8 +49,8 @@ def denoiser_mnist():
     d = 4
 
     #model = Autoencoder(encoded_space_dim=encoded_space_dim)
-    encoder = EncoderMnist(encoded_space_dim=d,fc2_input_dim=128)
-    decoder = DecoderMnist(encoded_space_dim=d,fc2_input_dim=128)
+    encoder = EncoderMnist(encoded_space_dim=d, fc2_input_dim=128)
+    decoder = DecoderMnist(encoded_space_dim=d, fc2_input_dim=128)
     params_to_optimize = [
         {'params': encoder.parameters()},
         {'params': decoder.parameters()}
@@ -63,7 +66,7 @@ def denoiser_mnist():
     encoder.to(device)
     decoder.to(device)
 
-    num_epochs = 30
+    num_epochs = 1
     diz_loss = {'train_loss':[],'val_loss':[]}
     for epoch in range(num_epochs):
        train_loss =train_epoch(encoder, decoder, device, train_loader, loss_fn, optim)
@@ -72,4 +75,17 @@ def denoiser_mnist():
        diz_loss['train_loss'].append(train_loss)
        diz_loss['val_loss'].append(val_loss)
 
+    test_images, _ = next(iter(test_loader))
+    test_image = test_images[10:11].to(device)
+    auxiliary_encoder = AuxiliaryFunction(encoder, test_image)
+    ig_explainer = IntegratedGradients(auxiliary_encoder)
+    baseline_image = torch.zeros(test_image.shape, device=device)
+    ig_attr = ig_explainer.attribute(test_image, baseline_image)
 
+    visualize_image_attr(torch.permute(ig_attr[0], (1, 2, 0)).cpu().numpy(),
+                         torch.permute(test_image[0], (1, 2, 0)).cpu().numpy(),
+                         "blended_heat_map")
+
+
+if __name__ == "__main__":
+    denoiser_mnist()
