@@ -14,7 +14,21 @@ class AuxiliaryFunction(Module):
         return torch.sum(self.prediction * self.black_box(input_features), dim=-1)
 
 
-class FeatureImportance:
-    def __init__(self, attr_method: Attribution, black_box: Module):
-        self.attr_method = attr_method
-        self.black_box = black_box
+class IntegratedGradients(Attribution):
+    def __init__(self, forward_func: Module):
+        super().__init__(forward_func=forward_func)
+
+    def attribute(self, input: torch.Tensor, baselines: torch.Tensor, n_steps: int = 50) -> torch.Tensor:
+        latent_reps = self.forward_func(input).detach()
+        grads = torch.zeros(input.shape, device=input.device)
+        x_input = input.clone().requires_grad_()
+        for step in range(n_steps):
+            weight = step/n_steps
+            self.forward_func((1-weight)*baselines + weight*x_input).backward(gradient=latent_reps)
+            grads += x_input.grad
+            x_input.grad.data.zero_()
+        int_grads = (input-baselines)*grads/n_steps
+        return int_grads.cpu()
+
+
+

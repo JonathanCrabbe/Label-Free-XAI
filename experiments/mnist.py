@@ -5,9 +5,8 @@ from torchvision import transforms
 from torch.utils.data import DataLoader, random_split
 from models.images import EncoderMnist, DecoderMnist, train_epoch, test_epoch
 from pathlib import Path
-from captum.attr import IntegratedGradients
 from captum.attr._utils.visualization import visualize_image_attr
-from explanations.features import AuxiliaryFunction
+from explanations.features import AuxiliaryFunction, IntegratedGradients
 
 
 
@@ -55,9 +54,8 @@ def denoiser_mnist(random_seed: int = 0, batch_size: int = 256, dim_latent: int 
         for n_batch, (test_images, _) in enumerate(test_loader):
             test_images = test_images.to(device)
             auxiliary_encoder = AuxiliaryFunction(encoder, test_images)
-            ig_explainer = IntegratedGradients(auxiliary_encoder)
-            attr_batch = ig_explainer.attribute(test_images, baselines=baseline_features,
-                                                internal_batch_size=len(test_images))
+            ig_explainer = IntegratedGradients(encoder)
+            attr_batch = ig_explainer.attribute(test_images, baselines=baseline_features)
             current_attribution[n_batch*batch_size:(n_batch*batch_size+len(test_images))] = attr_batch.cpu().numpy()
         attribution_delta = np.sum((current_attribution - prev_attribution)**2)
         print(f'\n Epoch {epoch + 1}/{n_epochs} \t train loss {train_loss:.3g} \t val loss {val_loss:.3g} \t '
