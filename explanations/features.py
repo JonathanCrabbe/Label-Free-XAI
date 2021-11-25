@@ -10,8 +10,14 @@ class AuxiliaryFunction(Module):
         self.base_features = base_features
         self.prediction = black_box(base_features)
 
-    def forward(self, input_features: torch.Tensor):
-        return torch.sum(self.prediction * self.black_box(input_features), dim=-1)
+    def forward(self, input_features: torch.Tensor) -> torch.Tensor:
+        if len(self.prediction) == len(input_features):
+            return torch.sum(self.prediction * self.black_box(input_features), dim=-1)
+        elif len(input_features) % len(self.prediction) == 0:
+            n_repeat = int(len(input_features) / len(self.prediction))
+            return torch.sum(self.prediction.repeat(n_repeat, 1) * self.black_box(input_features), dim=-1)
+        else:
+            raise ValueError("The internal batch size should be a multiple of input_features.shape[0]")
 
 
 class IntegratedGradients(Attribution):
