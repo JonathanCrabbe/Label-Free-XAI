@@ -1,16 +1,18 @@
-import torch
 import os
-import torchvision
+from pathlib import Path
+import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
-import matplotlib.pyplot as plt
-from torchvision import transforms
-from torch.utils.data import DataLoader, random_split
-from models.images import EncoderMnist, DecoderMnist, ClassifierMnist,\
-    train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch
-from pathlib import Path
+import torch
+import torchvision
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
+from torch.utils.data import DataLoader, random_split
+from torchvision import transforms
+
 from explanations.features import AuxiliaryFunction, attribute_auxiliary
+from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, VariationalAutoencoderMnist,\
+    train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, \
+    train_vae_epoch, test_vae_epoch
 
 
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
@@ -232,5 +234,44 @@ def track_importance(random_seed: int = 1, batch_size: int = 200,
     '''
 
 
+def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
+                           dim_latent: int = 10, n_epochs: int = 100, beta: float = 1) -> None:
+    # Initialize seed and device
+    torch.random.manual_seed(random_seed)
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+    # Load MNIST
+    data_dir = Path.cwd() / "data/mnist"
+    train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
+    test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
+    train_transform = transforms.Compose([transforms.ToTensor()])
+    test_transform = transforms.Compose([transforms.ToTensor()])
+    train_dataset.transform = train_transform
+    test_dataset.transform = test_transform
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    # Initialize autoencoder
+    vae = VariationalAutoencoderMnist(dim_latent)
+    vae.to(device)
+
+    # Initialize optimizer
+    params_to_optimize = [
+        {'params': vae.parameters()},
+    ]
+    optim = torch.optim.Adam(params_to_optimize, lr=1e-03, weight_decay=1e-05)
+
+    # Train the denoising autoencoder
+    loss_hist = {'train_loss': [], 'val_loss': []}
+
+    for epoch in range(n_epochs):
+        train_loss = train_vae_epoch(vae, device, train_loader, optim, beta)
+        val_loss = test_vae_epoch(vae, device, test_loader, beta)
+        loss_hist['train_loss'].append(train_loss)
+        loss_hist['val_loss'].append(val_loss)
+
+        print(f'\n Epoch {epoch + 1}/{n_epochs} \t Train loss {train_loss:.3g} \t Val loss {val_loss:.3g} \t ')
+
+
 if __name__ == "__main__":
-    track_importance()
+    vae_feature_importance()
