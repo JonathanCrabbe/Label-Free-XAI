@@ -6,10 +6,11 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from torchvision import transforms
 from torch.utils.data import DataLoader, random_split
-from models.images import EncoderMnist, DecoderMnist, train_epoch, test_epoch
+from models.images import EncoderMnist, DecoderMnist, ClassifierMnist,\
+    train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch
 from pathlib import Path
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
-from explanations.features import AuxiliaryFunction
+from explanations.features import AuxiliaryFunction, attribute_auxiliary
 
 
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
@@ -49,8 +50,8 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
     baseline_features = torch.zeros((1, 1, 28, 28), device=device)
 
     for epoch in range(n_epochs):
-        train_loss = train_epoch(encoder, decoder, device, train_loader, loss_fn, optim)
-        val_loss = test_epoch(encoder, decoder, device, test_loader, loss_fn)
+        train_loss = train_denoiser_epoch(encoder, decoder, device, train_loader, loss_fn, optim)
+        val_loss = test_denoiser_epoch(encoder, decoder, device, test_loader, loss_fn)
         loss_hist['train_loss'].append(train_loss)
         loss_hist['val_loss'].append(val_loss)
 
@@ -114,7 +115,8 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
 
 
 def track_importance(random_seed: int = 1, batch_size: int = 200,
-                     dim_latent: int = 4, n_epochs: int = 100) -> None:
+                     dim_latent: int = 50, n_epochs: int = 10,
+                     pretrain_ratio: float = 0.9) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -127,6 +129,9 @@ def track_importance(random_seed: int = 1, batch_size: int = 200,
     test_transform = transforms.Compose([transforms.ToTensor()])
     train_dataset.transform = train_transform
     test_dataset.transform = test_transform
+    pretrain_size = int(pretrain_ratio*len(train_dataset))
+    pretrain_dataset, train_dataset = random_split(train_dataset, [pretrain_size, len(train_dataset)-pretrain_size])
+    pretrain_loader = torch.utils.data.DataLoader(pretrain_dataset, batch_size=batch_size)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
@@ -136,35 +141,63 @@ def track_importance(random_seed: int = 1, batch_size: int = 200,
     encoder.to(device)
     decoder.to(device)
 
-    # Initialize optimizer
-    loss_fn = torch.nn.MSELoss()
-    params_to_optimize = [
+    # Compute the initial attribution
+    grad_shap = GradientShap(forward_func=encoder)
+    baseline_features = torch.zeros((1, 1, 28, 28), device=device)
+    initial_attribution = attribute_auxiliary(encoder, test_loader, device, grad_shap, baseline_features)
+
+    # Initialize pretrain optimizer
+    loss_pretrain = torch.nn.MSELoss()
+    params_pretrain = [
         {'params': encoder.parameters()},
         {'params': decoder.parameters()}
     ]
-    optim = torch.optim.Adam(params_to_optimize, lr=1e-03, weight_decay=1e-05)
+    optim_pretrain = torch.optim.Adam(params_pretrain, lr=1e-03, weight_decay=1e-05)
 
     # Train the denoising autoencoder
-    loss_hist = {'train_loss': [], 'val_loss': []}
-    baseline_features = torch.zeros((1, 1, 28, 28), device=device)
-    prev_attribution = np.zeros((len(test_dataset), 1, 28, 28))
-    current_attribution = np.zeros((len(test_dataset), 1, 28, 28))
-
+    print("\t Pretraining \t")
+    pretrain_loss_hist = {'train_loss': [], 'val_loss': []}
     for epoch in range(n_epochs):
-        train_loss = train_epoch(encoder, decoder, device, train_loader, loss_fn, optim, noise_factor=0)
-        val_loss = test_epoch(encoder, decoder, device, test_loader, loss_fn)
-        loss_hist['train_loss'].append(train_loss)
-        loss_hist['val_loss'].append(val_loss)
-        for n_batch, (test_images, _) in enumerate(test_loader):
-            test_images = test_images.to(device)
-            auxiliary_encoder = AuxiliaryFunction(encoder, test_images)
-            gradshap = GradientShap(auxiliary_encoder)
-            current_attribution[n_batch * batch_size:(n_batch * batch_size + len(test_images))] = \
-                gradshap.attribute(test_images, baseline_features).detach().cpu().numpy()
-        attribution_delta = np.mean(np.abs(current_attribution - prev_attribution))
-        prev_attribution = np.copy(current_attribution)
-        print(f'\n Epoch {epoch + 1}/{n_epochs} \t Train loss {train_loss:.3g} \t Val loss {val_loss:.3g} \t'
-              f'\t Attr. Delta {attribution_delta:.3g} ')
+        train_loss = train_denoiser_epoch(encoder, decoder, device, pretrain_loader, loss_pretrain, optim_pretrain,
+                                          noise_factor=0.3)
+        val_loss = test_denoiser_epoch(encoder, decoder, device, test_loader, loss_pretrain)
+        pretrain_loss_hist['train_loss'].append(train_loss)
+        pretrain_loss_hist['val_loss'].append(val_loss)
+        print(f'\n Epoch {epoch + 1}/{n_epochs} \t Train loss {train_loss:.3g} \t Val loss {val_loss:.3g} \t')
+
+    # Compute the attribution after pretraining
+    pretrain_attribution = attribute_auxiliary(encoder, test_loader, device, grad_shap, baseline_features)
+
+    # Initialize classifier
+    classifier = ClassifierMnist(encoder)
+    classifier = classifier.to(device)
+
+    # Initialize optimizer
+    loss_train = torch.nn.CrossEntropyLoss()
+    params_train = [
+        {'params': classifier.parameters()},
+    ]
+    optim_train = torch.optim.Adam(params_train)
+
+    # Train the classifier
+    print("\t Training \t")
+    train_loss_hist = {'train_loss': [], 'val_loss': []}
+    for epoch in range(n_epochs):
+        train_loss = train_classifier_epoch(classifier, device, train_loader, loss_train, optim_train)
+        val_loss = test_classifier_epoch(classifier, device, test_loader, loss_train)
+        train_loss_hist['train_loss'].append(train_loss)
+        train_loss_hist['val_loss'].append(val_loss)
+        print(f'\n Epoch {epoch + 1}/{n_epochs} \t Train loss {train_loss:.3g} \t Val loss {val_loss:.3g} \t')
+
+    # Compute the attribution after training
+    train_attribution = attribute_auxiliary(encoder, test_loader, device, grad_shap, baseline_features)
+
+    # Compute the attribution deltas
+    print(f'Initial vs Pretrained Attribution Delta: {np.mean(np.abs(pretrain_attribution-initial_attribution)):.3g}')
+    print(f'Pretrained vs Trained Attribution Delta: {np.mean(np.abs(train_attribution-pretrain_attribution)):.3g}')
+
+
+
 
 
     '''

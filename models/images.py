@@ -26,6 +26,7 @@ class EncoderMnist(nn.Module):
             nn.ReLU(True),
             nn.Linear(128, encoded_space_dim)
         )
+        self.encoded_space_dim = encoded_space_dim
 
     def forward(self, x):
         x = self.encoder_cnn(x)
@@ -54,6 +55,7 @@ class DecoderMnist(nn.Module):
             nn.ConvTranspose2d(8, 1, 3, stride=2, padding=1, output_padding=1)
         )
 
+
     def forward(self, x):
         x = self.decoder_lin(x)
         x = self.unflatten(x)
@@ -62,7 +64,29 @@ class DecoderMnist(nn.Module):
         return x
 
 
-def train_epoch(encoder, decoder, device, dataloader, loss_fn, optimizer, noise_factor=0.3):
+class ClassifierMnist(nn.Module):
+    def __init__(self, encoder: EncoderMnist):
+        super().__init__()
+        self.encoder_cnn = encoder.encoder_cnn
+        self.flatten = nn.Flatten(start_dim=1)
+        self.encoder_lin = encoder.encoder_lin
+        self.lin_output = nn.Sequential(
+            nn.Linear(encoder.encoded_space_dim, 10),
+            nn.Softmax()
+        )
+        self.encoded_space_dim = encoder.encoded_space_dim
+
+    def forward(self, x):
+        x = self.encoder_cnn(x)
+        x = self.flatten(x)
+        x = self.encoder_lin(x)
+        x = self.lin_output(x)
+        return x
+
+
+def train_denoiser_epoch(encoder: EncoderMnist, decoder: DecoderMnist, device: torch.device,
+                         dataloader: torch.utils.data.DataLoader, loss_fn: callable, optimizer: torch.optim.Optimizer,
+                         noise_factor: float = 0.3):
     # Set train mode for both the encoder and the decoder
     encoder.train()
     decoder.train()
@@ -77,7 +101,7 @@ def train_epoch(encoder, decoder, device, dataloader, loss_fn, optimizer, noise_
         # Decode data
         decoded_data = decoder(encoded_data)
         # Evaluate loss
-        loss = loss_fn(decoded_data, image_noisy)
+        loss = loss_fn(decoded_data, image_batch.to(device))
         # Backward pass
         optimizer.zero_grad()
         loss.backward()
@@ -86,7 +110,7 @@ def train_epoch(encoder, decoder, device, dataloader, loss_fn, optimizer, noise_
     return np.mean(train_loss)
 
 
-def test_epoch(encoder, decoder, device, dataloader, loss_fn):
+def test_denoiser_epoch(encoder, decoder, device, dataloader, loss_fn):
     # Set evaluation mode for encoder and decoder
     encoder.eval()
     decoder.eval()
@@ -103,6 +127,50 @@ def test_epoch(encoder, decoder, device, dataloader, loss_fn):
             decoded_data = decoder(encoded_data)
             conc_out.append(decoded_data.cpu())
             conc_label.append(image_batch.cpu())
+        # Create a single tensor with all the values in the lists
+        conc_out = torch.cat(conc_out)
+        conc_label = torch.cat(conc_label)
+        # Evaluate global loss
+        val_loss = loss_fn(conc_out, conc_label)
+    return val_loss.data
+
+
+def train_classifier_epoch(classifier: ClassifierMnist,  device: torch.device, dataloader: torch.utils.data.DataLoader,
+                           loss_fn: callable, optimizer: torch.optim.Optimizer):
+    # Set train mode for both the encoder and the decoder
+    classifier.train()
+    train_loss = []
+    # Iterate the dataloader (we do not need the label values, this is unsupervised learning)
+    for image_batch, label_batch in dataloader:
+        # Move tensor to the proper device
+        image_batch = image_batch.to(device)
+        # Predict Probabilities
+        proba_batch = classifier(image_batch)
+        # Evaluate loss
+        loss = loss_fn(proba_batch, label_batch.to(device))
+        # Backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        train_loss.append(loss.detach().cpu().numpy())
+    return np.mean(train_loss)
+
+
+def test_classifier_epoch(classifier: ClassifierMnist,  device: torch.device, dataloader: torch.utils.data.DataLoader,
+                          loss_fn: callable):
+    # Set evaluation mode for encoder and decoder
+    classifier.eval()
+    with torch.no_grad(): # No need to track the gradients
+        # Define the lists to store the outputs for each batch
+        conc_out = []
+        conc_label = []
+        for image_batch, label_batch in dataloader:
+            # Move tensor to the proper device
+            image_batch = image_batch.to(device)
+            # Predict probabilites
+            proba_batch = classifier(image_batch)
+            conc_out.append(proba_batch.cpu())
+            conc_label.append(label_batch.cpu())
         # Create a single tensor with all the values in the lists
         conc_out = torch.cat(conc_out)
         conc_label = torch.cat(conc_label)

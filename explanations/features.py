@@ -1,6 +1,8 @@
 import torch
+import numpy as np
 from captum.attr import Attribution
 from torch.nn import Module
+
 
 
 class AuxiliaryFunction(Module):
@@ -37,4 +39,15 @@ class IntegratedGradients(Attribution):
         return int_grads.cpu()
 
 
-
+def attribute_auxiliary(encoder: Module, data_loader: torch.utils.data.DataLoader,
+                        device: torch.device, attr_method: Attribution, baseline=None) -> np.ndarray:
+    attributions = []
+    for inputs, _ in data_loader:
+        inputs = inputs.to(device)
+        auxiliary_encoder = AuxiliaryFunction(encoder, inputs)
+        attr_method.forward_func = auxiliary_encoder
+        if baseline is not None:
+            attributions.append(attr_method.attribute(inputs, baseline).detach().cpu().numpy())
+        else:
+            attributions.append(attr_method.attribute(inputs).detach().cpu().numpy())
+    return np.concatenate(attributions)
