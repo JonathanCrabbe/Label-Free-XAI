@@ -235,7 +235,7 @@ def track_importance(random_seed: int = 1, batch_size: int = 200,
 
 
 def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
-                           dim_latent: int = 10, n_epochs: int = 100, beta: float = 1) -> None:
+                           dim_latent: int = 3, n_epochs: int = 10, beta: float = 20) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -271,6 +271,28 @@ def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
         loss_hist['val_loss'].append(val_loss)
 
         print(f'\n Epoch {epoch + 1}/{n_epochs} \t Train loss {train_loss:.3g} \t Val loss {val_loss:.3g} \t ')
+
+    test_images = next(iter(test_loader))[0].to(device)
+    test_image = test_images[1:2]
+    latent_rep = vae.encoder.mu(test_image).detach().cpu().numpy().reshape(dim_latent)
+    baseline_image = torch.zeros(test_image.shape, device=device)
+    gradshap = GradientShap(vae.encoder.mu)
+    attributions = []
+    W = 28
+    sns.heatmap(np.reshape(test_image.cpu().numpy(), (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
+                cbar=False, cmap=sns.color_palette("dark:white", as_cmap=True))
+    plt.show()
+    cblind_palette = sns.color_palette("colorblind")
+
+    for dim in range(dim_latent):
+        attribution = gradshap.attribute(test_image, baseline_image, target=dim).detach().cpu().numpy()
+        attributions.append(attribution)
+        saliency = np.abs(latent_rep[dim]*attribution)
+        sns.heatmap(np.reshape(saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
+                    cmap=sns.dark_palette(cblind_palette[dim], as_cmap=True), cbar=False)
+        plt.show()
+
+
 
 
 if __name__ == "__main__":

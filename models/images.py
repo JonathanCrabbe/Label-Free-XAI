@@ -87,7 +87,7 @@ class ClassifierMnist(nn.Module):
 
 
 class VarEncoderMnist(nn.Module):
-    def __init__(self, c: int = 62, latent_dims: int = 10):
+    def __init__(self, c: int = 64, latent_dims: int = 10):
         super(VarEncoderMnist, self).__init__()
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=c, kernel_size=4, stride=2, padding=1)  # out: c x 14 x 14
         self.conv2 = nn.Conv2d(in_channels=c, out_channels=c * 2, kernel_size=4, stride=2, padding=1)  # out: c x 7 x 7
@@ -102,6 +102,13 @@ class VarEncoderMnist(nn.Module):
         x_mu = self.fc_mu(x)
         x_logvar = self.fc_logvar(x)
         return x_mu, x_logvar
+
+    def mu(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = x.view(x.size(0), -1)  # flatten batch of multi-channel feature maps to a batch of feature vectors
+        x_mu = self.fc_mu(x)
+        return x_mu
 
 
 class VarDecoderMnist(nn.Module):
