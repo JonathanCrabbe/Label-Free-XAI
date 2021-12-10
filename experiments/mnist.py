@@ -280,18 +280,27 @@ def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
     attributions = []
     W = 28
     cblind_palette = sns.color_palette("colorblind")
+    fig = plt.figure(figsize=(10, 10))
+
+    for image_batch, _ in test_loader:
+        image_batch = image_batch.to(device)
+        latent_batch = vae.encoder.mu(image_batch).detach().cpu().numpy().reshape((len(image_batch), dim_latent, 1, 1))
+        attributions_batch = []
+        for dim in range(dim_latent):
+            attribution = gradshap.attribute(image_batch, baseline_image, target=dim).detach().cpu().numpy()
+            attributions_batch.append(np.reshape(attribution, (len(image_batch), 1, W, W)))
+        attributions.append(np.concatenate(attributions_batch, axis=1))
+    attributions = np.concatenate(attributions)
 
     for dim in range(dim_latent):
         attribution = gradshap.attribute(test_image, baseline_image, target=dim).detach().cpu().numpy()
-        attributions.append(attribution)
         saliency = np.abs(latent_rep[dim]*attribution)
-        h = sns.heatmap(np.reshape(saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
-                        cmap=sns.dark_palette(cblind_palette[dim], as_cmap=True), cbar=True, alpha=0.5, zorder=2)
+        ax = fig.add_subplot(3, 3, dim+1)
+        h = sns.heatmap(np.reshape(saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False, ax=ax,
+                        cmap=sns.dark_palette(cblind_palette[dim], as_cmap=True), cbar=True, alpha=0.7, zorder=2)
         h.imshow(np.reshape(test_image.cpu().numpy(), (W, W)), zorder=1,
                  cmap=sns.color_palette("dark:white", as_cmap=True))
-        plt.show()
-
-
+    plt.show()
 
 
 if __name__ == "__main__":

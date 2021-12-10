@@ -151,6 +151,33 @@ class VariationalAutoencoderMnist(nn.Module):
             return mu
 
 
+class ClassifierLatent(nn.Module):
+    def __init__(self, latent_dims: int):
+        super().__init__()
+        self.encoder_cnn = nn.Sequential(
+            nn.Conv2d(1, 8, 3, stride=2, padding=1),
+            nn.ReLU(True),
+            nn.Conv2d(8, 16, 3, stride=2, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(True),
+            nn.Conv2d(16, 32, 3, stride=2, padding=0),
+            nn.ReLU(True)
+        )
+        self.flatten = nn.Flatten(start_dim=1)
+        self.encoder_lin = nn.Sequential(
+            nn.Linear(3 * 3 * 32, 128),
+            nn.ReLU(True),
+            nn.Linear(128, latent_dims)
+        )
+
+    def forward(self, x):
+        x = self.encoder_cnn(x)
+        x = self.flatten(x)
+        x = self.encoder_lin(x)
+        x = nn.Softmax(x)
+        return x
+
+
 def vae_loss(recon_x, x, mu, logvar, beta):
     # recon_x is the probability of a multivariate Bernoulli distribution p.
     # -log(p(x)) is then the pixel-wise binary cross-entropy.
