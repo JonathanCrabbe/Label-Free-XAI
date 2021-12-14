@@ -2,12 +2,13 @@ from torch import nn
 import torch.nn.functional as F
 import torch
 import numpy as np
+import math
 
 '''
- This code is adapted from 
+ These models are adapted from 
  https://medium.com/dataseries/convolutional-autoencoder-in-pytorch-on-mnist-dataset-d65145c132ac
- and 
- 
+ https://github.com/smartgeometry-ucl/dl4g
+ https://github.com/AntixK/PyTorch-VAE
 '''
 
 
@@ -139,7 +140,7 @@ class VariationalAutoencoderMnist(nn.Module):
         latent_mu, latent_logvar = self.encoder(x)
         latent = self.latent_sample(latent_mu, latent_logvar)
         x_recon = self.decoder(latent)
-        return x_recon, latent_mu, latent_logvar
+        return x_recon, latent_mu, latent_logvar, latent
 
     def latent_sample(self, mu, logvar):
         if self.training:
@@ -178,22 +179,64 @@ class ClassifierLatent(nn.Module):
         return x
 
 
-def vae_loss(recon_x, x, mu, logvar, beta):
-    # recon_x is the probability of a multivariate Bernoulli distribution p.
-    # -log(p(x)) is then the pixel-wise binary cross-entropy.
-    # Averaging or not averaging the binary cross-entropy over all pixels here
-    # is a subtle detail with big effect on training, since it changes the weight
-    # we need to pick for the other loss term by several orders of magnitude.
-    # Not averaging is the direct implementation of the negative log likelihood,
-    # but averaging makes the weight of the other loss term independent of the image resolution.
-    recon_loss = F.binary_cross_entropy(recon_x.view(-1, 784), x.view(-1, 784), reduction='sum')
+def beta_vae_loss(recon_x: torch.Tensor, x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor,
+                  beta: float, dataset_size: int) -> torch.Tensor:
 
-    # KL-divergence between the prior distribution over latent vectors
-    # (the one we are going to sample from when generating new images)
-    # and the distribution estimated by the generator for the given image.
-    kldivergence = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    #recon_loss = F.binary_cross_entropy(recon_x.view(-1, 784), x.view(-1, 784), reduction='sum')
+    kld_weight = x.shape[0] / dataset_size
+    recon_loss = F.mse_loss(recon_x, x)
+    kld_loss = torch.mean(-0.5 * torch.sum(1 + logvar - mu ** 2 - logvar.exp(), dim = 1), dim = 0)
+    loss = recon_loss + beta * kld_weight * kld_loss
 
-    return recon_loss + beta * kldivergence
+    return loss
+
+
+def log_density_gaussian(x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor):
+        """
+        Computes the log pdf of the Gaussian with parameters mu and logvar at x
+        :param x: (Tensor) Point at whichGaussian PDF is to be evaluated
+        :param mu: (Tensor) Mean of the Gaussian distribution
+        :param logvar: (Tensor) Log variance of the Gaussian distribution
+        :return:
+        """
+        norm = - 0.5 * (math.log(2 * math.pi) + logvar)
+        log_density = norm - 0.5 * ((x - mu) ** 2 * torch.exp(-logvar))
+        return log_density
+
+
+def beta_tcvae_loss_function(recon_x: torch.Tensor, x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor,
+                             z: torch.Tensor, beta: float, dataset_size: int) -> torch.Tensor:
+
+    #recon_loss = F.binary_cross_entropy(recon_x.view(-1, 784), x.view(-1, 784), reduction='sum')
+    recon_loss = F.mse_loss(recon_x, x, reduction='sum')
+    log_q_zx = log_density_gaussian(z, mu, logvar).sum(dim=1)
+
+    zeros = torch.zeros_like(z)
+    log_p_z = log_density_gaussian(z, zeros, zeros).sum(dim=1)
+
+    batch_size, latent_dim = z.shape
+    mat_log_q_z = log_density_gaussian(z.view(batch_size, 1, latent_dim),
+                                       mu.view(1, batch_size, latent_dim),
+                                       logvar.view(1, batch_size, latent_dim))
+
+    strat_weight = (dataset_size - batch_size + 1) / (dataset_size * (batch_size - 1))
+    importance_weights = torch.Tensor(batch_size, batch_size).fill_(1 / (batch_size - 1)).to(x.device)
+    importance_weights.view(-1)[::batch_size] = 1 / dataset_size
+    importance_weights.view(-1)[1::batch_size] = strat_weight
+    importance_weights[batch_size - 2, 0] = strat_weight
+    log_importance_weights = importance_weights.log()
+
+    mat_log_q_z += log_importance_weights.view(batch_size, batch_size, 1)
+
+    log_q_z = torch.logsumexp(mat_log_q_z.sum(2), dim=1, keepdim=False)
+    log_prod_q_z = torch.logsumexp(mat_log_q_z, dim=1, keepdim=False).sum(1)
+
+    mi_loss = (log_q_zx - log_q_z).mean()
+    tc_loss = (log_q_z - log_prod_q_z).mean()
+    kld_loss = (log_prod_q_z - log_p_z).mean()
+
+    loss = recon_loss / batch_size + mi_loss + beta * tc_loss + kld_loss
+    return loss
 
 
 def train_denoiser_epoch(encoder: EncoderMnist, decoder: DecoderMnist, device: torch.device,
@@ -291,14 +334,14 @@ def test_classifier_epoch(classifier: ClassifierMnist, device: torch.device, dat
     return val_loss.data
 
 
-def train_vae_epoch(vae: VariationalAutoencoderMnist, device: torch.device, dataloader: torch.utils.data.DataLoader,
-                    optimizer: torch.optim.Optimizer, beta: float = 1):
+def train_beta_vae_epoch(vae: VariationalAutoencoderMnist, device: torch.device, dataloader: torch.utils.data.DataLoader,
+                         optimizer: torch.optim.Optimizer, beta: float = 1, dataset_size: int = 60000):
     vae.train()
     train_loss = []
     for image_batch, _ in dataloader:
         image_batch = image_batch.to(device)
-        recon_batch, mu_batch, logvar_batch = vae(image_batch)
-        loss = vae_loss(recon_batch, image_batch, mu_batch, logvar_batch, beta)
+        recon_batch, mu_batch, logvar_batch, _ = vae(image_batch)
+        loss = beta_vae_loss(recon_batch, image_batch, mu_batch, logvar_batch, beta, dataset_size)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -306,14 +349,45 @@ def train_vae_epoch(vae: VariationalAutoencoderMnist, device: torch.device, data
     return np.mean(train_loss)
 
 
-def test_vae_epoch(vae: VariationalAutoencoderMnist, device: torch.device, dataloader: torch.utils.data.DataLoader,
-                   beta: float = 1):
+def test_beta_vae_epoch(vae: VariationalAutoencoderMnist, device: torch.device, dataloader: torch.utils.data.DataLoader,
+                        beta: float = 1, dataset_size: int = 10000):
     vae.eval()
     test_loss = []
     with torch.no_grad():
         for image_batch, _ in dataloader:
             image_batch = image_batch.to(device)
-            recon_batch, mu_batch, logvar_batch = vae(image_batch)
-            loss = vae_loss(recon_batch, image_batch, mu_batch, logvar_batch, beta)
+            recon_batch, mu_batch, logvar_batch, _ = vae(image_batch)
+            loss = beta_vae_loss(recon_batch, image_batch, mu_batch, logvar_batch, beta, dataset_size)
+            test_loss.append(loss.cpu().numpy())
+    return np.mean(test_loss)
+
+
+def train_beta_tcvae_epoch(vae: VariationalAutoencoderMnist, device: torch.device,
+                           dataloader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer,
+                           beta: float = 1, dataset_size: int = 60000):
+    vae.train()
+    train_loss = []
+    for image_batch, _ in dataloader:
+        image_batch = image_batch.to(device)
+        recon_batch, mu_batch, logvar_batch, latent_batch = vae(image_batch)
+        loss = beta_tcvae_loss_function(recon_batch, image_batch, mu_batch, logvar_batch,
+                                        latent_batch, beta, dataset_size)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        train_loss.append(loss.detach().cpu().numpy())
+    return np.mean(train_loss)
+
+
+def test_beta_tcvae_epoch(vae: VariationalAutoencoderMnist, device: torch.device,
+                          dataloader: torch.utils.data.DataLoader, beta: float = 1, dataset_size: int = 10000):
+    vae.eval()
+    test_loss = []
+    with torch.no_grad():
+        for image_batch, _ in dataloader:
+            image_batch = image_batch.to(device)
+            recon_batch, mu_batch, logvar_batch, latent_batch = vae(image_batch)
+            loss = beta_tcvae_loss_function(recon_batch, image_batch, mu_batch, logvar_batch,
+                                            latent_batch, beta, dataset_size)
             test_loss.append(loss.cpu().numpy())
     return np.mean(test_loss)

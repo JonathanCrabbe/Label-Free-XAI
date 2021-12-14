@@ -13,7 +13,7 @@ from scipy.stats import pearsonr
 from explanations.features import AuxiliaryFunction, attribute_auxiliary
 from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, VariationalAutoencoderMnist,\
     train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, \
-    train_vae_epoch, test_vae_epoch
+    train_beta_vae_epoch, test_beta_vae_epoch, train_beta_tcvae_epoch, test_beta_tcvae_epoch
 
 
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
@@ -266,8 +266,8 @@ def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
     loss_hist = {'train_loss': [], 'val_loss': []}
 
     for epoch in range(n_epochs):
-        train_loss = train_vae_epoch(vae, device, train_loader, optim, beta)
-        val_loss = test_vae_epoch(vae, device, test_loader, beta)
+        train_loss = train_beta_vae_epoch(vae, device, train_loader, optim, beta)
+        val_loss = test_beta_vae_epoch(vae, device, test_loader, beta)
         loss_hist['train_loss'].append(train_loss)
         loss_hist['val_loss'].append(val_loss)
 
