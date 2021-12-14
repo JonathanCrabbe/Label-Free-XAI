@@ -8,6 +8,7 @@ import torchvision
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
+from scipy.stats import pearsonr
 
 from explanations.features import AuxiliaryFunction, attribute_auxiliary
 from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, VariationalAutoencoderMnist,\
@@ -235,7 +236,7 @@ def track_importance(random_seed: int = 1, batch_size: int = 200,
 
 
 def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
-                           dim_latent: int = 3, n_epochs: int = 1, beta: float = 1) -> None:
+                           dim_latent: int = 2, n_epochs: int = 10, beta: float = 1) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -291,6 +292,8 @@ def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
             attributions_batch.append(np.reshape(attribution, (len(image_batch), 1, W, W)))
         attributions.append(np.concatenate(attributions_batch, axis=1))
     attributions = np.concatenate(attributions)
+    metric = pearsonr(attributions[:, 0, :, :].flatten(), attributions[:, 1, :, :].flatten())
+    print(metric)
 
     for dim in range(dim_latent):
         attribution = gradshap.attribute(test_image, baseline_image, target=dim).detach().cpu().numpy()
