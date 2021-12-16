@@ -15,8 +15,7 @@ from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, BetaVaeMn
     train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, VAE, EncoderBurgess,\
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
-from utils.math import off_diagonal_sum
-
+from utils.math import off_diagonal_sum, cos_saliency
 
 
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
@@ -299,9 +298,10 @@ def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
             #plt.show()
 
 
-def disvae_feature_importance(random_seed: int = 1, batch_size: int = 200, n_plots: int = 10,
-                              dim_latent: int = 5, n_epochs: int = 20, beta_list: list = [0, 1e-1, 1, 5, 10]) -> None:
+def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plots: int = 20,
+                              dim_latent: int = 5, n_epochs: int = 20, beta_list: list = [0, 1, 5, 10]) -> None:
     # Initialize seed and device
+    np.random.seed(random_seed)
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     loss_types = ["betaH",  "btcvae"]
@@ -326,44 +326,49 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 200, n_plo
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     for beta in beta_list:
-        logging.info(f"Now working with beta = {beta}...")
+        logging.info(f"Now working with beta {beta}")
 
         # Initialize vaes
         encoder = EncoderBurgess(img_size, dim_latent)
         decoder = DecoderBurgess(img_size, dim_latent)
         loss_f = BtcvaeLoss(beta, is_mss=False)
         model = VAE(img_size, encoder, decoder, dim_latent, loss_f)
-        logging.info(f"Now fitting model...")
+        logging.info(f"Now fitting model")
         model.fit(device, train_loader, test_loader, n_epochs)
 
         baseline_image = torch.zeros((1, 1, W, W), device=device)
         gradshap = GradientShap(encoder.mu)
         attributions = []
+        latents = []
 
         for image_batch, _ in test_loader:
             image_batch = image_batch.to(device)
             attributions_batch = []
+            latents.append(encoder.mu(image_batch).detach().cpu().numpy())
             for dim in range(dim_latent):
                 attribution = gradshap.attribute(image_batch, baseline_image, target=dim).detach().cpu().numpy()
                 attributions_batch.append(np.reshape(attribution, (len(image_batch), 1, W, W)))
             attributions.append(np.concatenate(attributions_batch, axis=1))
-        attributions = np.abs(np.concatenate(attributions))
-        corr = np.corrcoef(attributions.swapaxes(1, -1).reshape(-1, dim_latent))[0]
+        latents = np.concatenate(latents)
+        attributions = np.concatenate(attributions)
+        attributions = np.abs(np.expand_dims(latents, (2, 3)) * attributions)
+        corr = np.corrcoef(attributions.swapaxes(0, 1).reshape(dim_latent, -1))
         metric = off_diagonal_sum(corr)/(dim_latent*(dim_latent-1))
         """
         corr = spearmanr(attributions[:, 0, :, :].flatten(),
                         attributions[:, 1, :, :].flatten())[0]
         """
-        logging.info(f"Model  \t Beta {beta} \t Spearman Correlation {metric:.2g} ")
+        logging.info(f"Model  \t Beta {beta} \t Pearson Correlation {metric:.2g} ")
         cblind_palette = sns.color_palette("colorblind")
         fig, axs = plt.subplots(ncols=dim_latent, nrows=n_plots, figsize=(4*dim_latent, 4*n_plots))
         for example_id in range(n_plots):
-            max_saliency = np.max(attributions[example_id, :, :, :])
+            test_id = torch.nonzero(test_dataset.targets == (example_id % 10))[example_id // 10]
+            max_saliency = np.max(attributions[test_id])
             for dim in range(dim_latent):
-                sub_saliency = attributions[example_id, dim, :, :]
+                sub_saliency = attributions[test_id, dim, :, :]
                 ax = axs[example_id, dim]
                 h = sns.heatmap(np.reshape(sub_saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
-                                ax=ax,cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=True,
+                                ax=ax, cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=True,
                                 alpha=1, zorder=2, vmin=0, vmax=max_saliency)
         save_dir = Path.cwd() / "results/mnist/vae"
         if not save_dir.exists():
