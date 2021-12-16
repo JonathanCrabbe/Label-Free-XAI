@@ -1,8 +1,11 @@
-from torch import nn
 import torch.nn.functional as F
 import torch
 import numpy as np
 import math
+import logging
+from torch import nn
+from models.losses import BaseVAELoss
+from tqdm import tqdm
 
 '''
  These models are adapted from 
@@ -130,11 +133,80 @@ class VarDecoderMnist(nn.Module):
         return x
 
 
-class VariationalAutoencoderMnist(nn.Module):
-    def __init__(self, latent_dims: int = 10):
-        super(VariationalAutoencoderMnist, self).__init__()
+class BetaVaeMnist(nn.Module):
+    def __init__(self, latent_dims: int = 10, beta: int = 1):
+        super(BetaVaeMnist, self).__init__()
         self.encoder = VarEncoderMnist(latent_dims=latent_dims)
         self.decoder = VarDecoderMnist(latent_dims=latent_dims)
+        self.beta = beta
+
+    def forward(self, x):
+        latent_mu, latent_logvar = self.encoder(x)
+        latent = self.latent_sample(latent_mu, latent_logvar)
+        x_recon = self.decoder(latent)
+        return x_recon, latent_mu, latent_logvar
+
+    def latent_sample(self, mu, logvar):
+        if self.training:
+            # the reparameterization trick
+            std = logvar.mul(0.5).exp_()
+            eps = torch.empty_like(std).normal_()
+            return eps.mul(std).add_(mu)
+        else:
+            return mu
+
+    def loss(self, recon_x: torch.Tensor, x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor,
+             dataset_size: int) -> torch.Tensor:
+        # recon_loss = F.mse_loss(recon_x, x)
+        recon_loss = F.binary_cross_entropy(recon_x.view(-1, 784), x.view(-1, 784), reduction='mean')
+        kld_weight = x.shape[0] / dataset_size
+        kld_loss = torch.mean(-0.5 * torch.sum(1 + logvar - mu ** 2 - logvar.exp(), dim=1), dim=0)
+        loss = recon_loss + self.beta * kld_weight * kld_loss
+
+        return loss
+
+    def train_epoch(self, device: torch.device, dataloader: torch.utils.data.DataLoader,
+                    optimizer: torch.optim.Optimizer) -> np.ndarray:
+        self.train()
+        train_loss = []
+        for image_batch, _ in dataloader:
+            image_batch = image_batch.to(device)
+            recon_batch, mu_batch, logvar_batch = self.forward(image_batch)
+            loss = self.loss(recon_batch, image_batch, mu_batch, logvar_batch, dataset_size=len(dataloader.dataset))
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            train_loss.append(loss.detach().cpu().numpy())
+        return np.mean(train_loss)
+
+    def test_epoch(self, device: torch.device, dataloader: torch.utils.data.DataLoader) -> np.ndarray:
+        self.eval()
+        test_loss = []
+        with torch.no_grad():
+            for image_batch, _ in dataloader:
+                image_batch = image_batch.to(device)
+                recon_batch, mu_batch, logvar_batch = self.forward(image_batch)
+                loss = self.loss(recon_batch, image_batch, mu_batch, logvar_batch, dataset_size=len(dataloader.dataset))
+                test_loss.append(loss.cpu().numpy())
+        return np.mean(test_loss)
+
+    def fit(self, device: torch.device, train_loader: torch.utils.data.DataLoader,
+            test_loader: torch.utils.data.DataLoader, n_epoch: int = 30) -> None:
+        self.to(device)
+        optim = torch.optim.Adam(self.parameters(), lr=1e-03, weight_decay=1e-05)
+        for epoch in range(n_epoch):
+            train_loss = self.train_epoch(device, train_loader, optim)
+            test_loss = self.test_epoch(device, test_loader)
+            logging.info(f' Epoch {epoch + 1}/{n_epoch} \t '
+                         f'Train loss {train_loss:.3g} \t Test loss {test_loss:.3g} \t ')
+
+
+class BetaTcVaeMnist(nn.Module):
+    def __init__(self, latent_dims: int = 10, beta: int = 1):
+        super(BetaTcVaeMnist, self).__init__()
+        self.encoder = VarEncoderMnist(latent_dims=latent_dims)
+        self.decoder = VarDecoderMnist(latent_dims=latent_dims)
+        self.beta = beta
 
     def forward(self, x):
         latent_mu, latent_logvar = self.encoder(x)
@@ -150,6 +222,319 @@ class VariationalAutoencoderMnist(nn.Module):
             return eps.mul(std).add_(mu)
         else:
             return mu
+
+    def loss(self, recon_x: torch.Tensor, x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor,
+             z: torch.Tensor, dataset_size: int) -> torch.Tensor:
+
+        recon_loss = F.binary_cross_entropy(recon_x.view(-1, 784), x.view(-1, 784), reduction='mean')
+        # recon_loss = F.mse_loss(recon_x, x, reduction='sum')
+        log_q_zx = log_density_gaussian(z, mu, logvar).sum(dim=1)
+
+        zeros = torch.zeros_like(z)
+        log_p_z = log_density_gaussian(z, zeros, zeros).sum(dim=1)
+
+        batch_size, latent_dim = z.shape
+        mat_log_q_z = log_density_gaussian(z.view(batch_size, 1, latent_dim),
+                                           mu.view(1, batch_size, latent_dim),
+                                           logvar.view(1, batch_size, latent_dim))
+
+        strat_weight = (dataset_size - batch_size + 1) / (dataset_size * (batch_size - 1))
+        importance_weights = torch.Tensor(batch_size, batch_size).fill_(1 / (batch_size - 1)).to(x.device)
+        importance_weights.view(-1)[::batch_size] = 1 / dataset_size
+        importance_weights.view(-1)[1::batch_size] = strat_weight
+        importance_weights[batch_size - 2, 0] = strat_weight
+        log_importance_weights = importance_weights.log()
+
+        mat_log_q_z += log_importance_weights.view(batch_size, batch_size, 1)
+
+        log_q_z = torch.logsumexp(mat_log_q_z.sum(2), dim=1, keepdim=False)
+        log_prod_q_z = torch.logsumexp(mat_log_q_z, dim=1, keepdim=False).sum(1)
+
+        mi_loss = (log_q_zx - log_q_z).mean()
+        tc_loss = (log_q_z - log_prod_q_z).mean()
+        kld_loss = (log_prod_q_z - log_p_z).mean()
+
+        loss = recon_loss / batch_size + mi_loss + self.beta * tc_loss + kld_loss
+        return loss
+
+    def train_epoch(self, device: torch.device, dataloader: torch.utils.data.DataLoader,
+                    optimizer: torch.optim.Optimizer) -> np.ndarray:
+        self.train()
+        train_loss = []
+        for image_batch, _ in dataloader:
+            image_batch = image_batch.to(device)
+            recon_batch, mu_batch, logvar_batch, latent_batch = self.forward(image_batch)
+            loss = self.loss(recon_batch, image_batch, mu_batch, logvar_batch,
+                             latent_batch, len(dataloader.dataset))
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            train_loss.append(loss.detach().cpu().numpy())
+        return np.mean(train_loss)
+
+    def test_epoch(self, device: torch.device, dataloader: torch.utils.data.DataLoader):
+        self.eval()
+        test_loss = []
+        with torch.no_grad():
+            for image_batch, _ in dataloader:
+                image_batch = image_batch.to(device)
+                recon_batch, mu_batch, logvar_batch, latent_batch = self.forward(image_batch)
+                loss = self.loss(recon_batch, image_batch, mu_batch,
+                                 logvar_batch, latent_batch, len(dataloader.dataset))
+                test_loss.append(loss.cpu().numpy())
+        return np.mean(test_loss)
+
+    def fit(self, device: torch.device, train_loader: torch.utils.data.DataLoader,
+            test_loader: torch.utils.data.DataLoader, n_epoch: int = 30) -> None:
+        self.to(device)
+        optim = torch.optim.Adam(self.parameters(), lr=1e-03, weight_decay=1e-05)
+        for epoch in range(n_epoch):
+            train_loss = self.train_epoch(device, train_loader, optim)
+            test_loss = self.test_epoch(device, test_loader)
+            logging.info(f'Epoch {epoch + 1}/{n_epoch} \t '
+                         f'Train loss {train_loss:.3g} \t Test loss {test_loss:.3g} \t ')
+
+
+class EncoderBurgess(nn.Module):
+    def __init__(self, img_size,
+                 latent_dim=10):
+        r"""Encoder of the model proposed in [1].
+        Parameters
+        ----------
+        img_size : tuple of ints
+            Size of images. E.g. (1, 32, 32) or (3, 64, 64).
+        latent_dim : int
+            Dimensionality of latent output.
+        Model Architecture (transposed for decoder)
+        ------------
+        - 4 convolutional layers (each with 32 channels), (4 x 4 kernel), (stride of 2)
+        - 2 fully connected layers (each of 256 units)
+        - Latent distribution:
+            - 1 fully connected layer of 20 units (log variance and mean for 10 Gaussians)
+        References:
+            [1] Burgess, Christopher P., et al. "Understanding disentangling in
+            $\beta$-VAE." arXiv preprint arXiv:1804.03599 (2018).
+        """
+        super(EncoderBurgess, self).__init__()
+
+        # Layer parameters
+        hid_channels = 32
+        kernel_size = 4
+        hidden_dim = 256
+        self.latent_dim = latent_dim
+        self.img_size = img_size
+        # Shape required to start transpose convs
+        self.reshape = (hid_channels, kernel_size, kernel_size)
+        n_chan = self.img_size[0]
+
+        # Convolutional layers
+        cnn_kwargs = dict(stride=2, padding=1)
+        self.conv1 = nn.Conv2d(n_chan, hid_channels, kernel_size, **cnn_kwargs)
+        self.conv2 = nn.Conv2d(hid_channels, hid_channels, kernel_size, **cnn_kwargs)
+        self.conv3 = nn.Conv2d(hid_channels, hid_channels, kernel_size, **cnn_kwargs)
+
+        # If input image is 64x64 do fourth convolution
+        if self.img_size[1] == self.img_size[2] == 64:
+            self.conv_64 = nn.Conv2d(hid_channels, hid_channels, kernel_size, **cnn_kwargs)
+
+        # Fully connected layers
+        self.lin1 = nn.Linear(np.product(self.reshape), hidden_dim)
+        self.lin2 = nn.Linear(hidden_dim, hidden_dim)
+
+        # Fully connected layers for mean and variance
+        self.mu_logvar_gen = nn.Linear(hidden_dim, self.latent_dim * 2)
+
+    def forward(self, x):
+        batch_size = x.size(0)
+
+        # Convolutional layers with ReLu activations
+        x = torch.relu(self.conv1(x))
+        x = torch.relu(self.conv2(x))
+        x = torch.relu(self.conv3(x))
+        if self.img_size[1] == self.img_size[2] == 64:
+            x = torch.relu(self.conv_64(x))
+
+        # Fully connected layers with ReLu activations
+        x = x.view((batch_size, -1))
+        x = torch.relu(self.lin1(x))
+        x = torch.relu(self.lin2(x))
+
+        # Fully connected layer for log variance and mean
+        # Log std-dev in paper (bear in mind)
+        mu_logvar = self.mu_logvar_gen(x)
+        mu, logvar = mu_logvar.view(-1, self.latent_dim, 2).unbind(-1)
+
+        return mu, logvar
+
+    def mu(self, x):
+        return self.forward(x)[0]
+
+
+class DecoderBurgess(nn.Module):
+    def __init__(self, img_size,
+                 latent_dim=10):
+        r"""Decoder of the model proposed in [1].
+        Parameters
+        ----------
+        img_size : tuple of ints
+            Size of images. E.g. (1, 32, 32) or (3, 64, 64).
+        latent_dim : int
+            Dimensionality of latent output.
+        Model Architecture (transposed for decoder)
+        ------------
+        - 4 convolutional layers (each with 32 channels), (4 x 4 kernel), (stride of 2)
+        - 2 fully connected layers (each of 256 units)
+        - Latent distribution:
+            - 1 fully connected layer of 20 units (log variance and mean for 10 Gaussians)
+        References:
+            [1] Burgess, Christopher P., et al. "Understanding disentangling in
+            $\beta$-VAE." arXiv preprint arXiv:1804.03599 (2018).
+        """
+        super(DecoderBurgess, self).__init__()
+
+        # Layer parameters
+        hid_channels = 32
+        kernel_size = 4
+        hidden_dim = 256
+        self.img_size = img_size
+        # Shape required to start transpose convs
+        self.reshape = (hid_channels, kernel_size, kernel_size)
+        n_chan = self.img_size[0]
+        self.img_size = img_size
+
+        # Fully connected layers
+        self.lin1 = nn.Linear(latent_dim, hidden_dim)
+        self.lin2 = nn.Linear(hidden_dim, hidden_dim)
+        self.lin3 = nn.Linear(hidden_dim, np.product(self.reshape))
+
+        # Convolutional layers
+        cnn_kwargs = dict(stride=2, padding=1)
+        # If input image is 64x64 do fourth convolution
+        if self.img_size[1] == self.img_size[2] == 64:
+            self.convT_64 = nn.ConvTranspose2d(hid_channels, hid_channels, kernel_size, **cnn_kwargs)
+
+        self.convT1 = nn.ConvTranspose2d(hid_channels, hid_channels, kernel_size, **cnn_kwargs)
+        self.convT2 = nn.ConvTranspose2d(hid_channels, hid_channels, kernel_size, **cnn_kwargs)
+        self.convT3 = nn.ConvTranspose2d(hid_channels, n_chan, kernel_size, **cnn_kwargs)
+
+    def forward(self, z):
+        batch_size = z.size(0)
+
+        # Fully connected layers with ReLu activations
+        x = torch.relu(self.lin1(z))
+        x = torch.relu(self.lin2(x))
+        x = torch.relu(self.lin3(x))
+        x = x.view(batch_size, *self.reshape)
+
+        # Convolutional layers with ReLu activations
+        if self.img_size[1] == self.img_size[2] == 64:
+            x = torch.relu(self.convT_64(x))
+        x = torch.relu(self.convT1(x))
+        x = torch.relu(self.convT2(x))
+        # Sigmoid activation for final conv layer
+        x = torch.sigmoid(self.convT3(x))
+
+        return x
+
+
+class VAE(nn.Module):
+    def __init__(self, img_size: tuple, encoder: EncoderBurgess,
+                 decoder: DecoderBurgess, latent_dim: int, loss_f: BaseVAELoss):
+        """
+        Class which defines model and forward pass.
+        Parameters
+        ----------
+        img_size : tuple of ints
+            Size of images. E.g. (1, 32, 32) or (3, 64, 64).
+        """
+        super(VAE, self).__init__()
+        self.latent_dim = latent_dim
+        self.img_size = img_size
+        self.num_pixels = self.img_size[1] * self.img_size[2]
+        self.encoder = encoder
+        self.decoder = decoder
+        self.loss_f = loss_f
+
+    def reparameterize(self, mean, logvar):
+        """
+        Samples from a normal distribution using the reparameterization trick.
+        Parameters
+        ----------
+        mean : torch.Tensor
+            Mean of the normal distribution. Shape (batch_size, latent_dim)
+        logvar : torch.Tensor
+            Diagonal log variance of the normal distribution. Shape (batch_size,
+            latent_dim)
+        """
+        if self.training:
+            std = torch.exp(0.5 * logvar)
+            eps = torch.randn_like(std)
+            return mean + std * eps
+        else:
+            # Reconstruction mode
+            return mean
+
+    def forward(self, x):
+        """
+        Forward pass of model.
+        Parameters
+        ----------
+        x : torch.Tensor
+            Batch of data. Shape (batch_size, n_chan, height, width)
+        """
+        latent_dist = self.encoder(x)
+        latent_sample = self.reparameterize(*latent_dist)
+        reconstruct = self.decoder(latent_sample)
+        return reconstruct, latent_dist, latent_sample
+
+    def sample_latent(self, x):
+        """
+        Returns a sample from the latent distribution.
+        Parameters
+        ----------
+        x : torch.Tensor
+            Batch of data. Shape (batch_size, n_chan, height, width)
+        """
+        latent_dist = self.encoder(x)
+        latent_sample = self.reparameterize(*latent_dist)
+        return latent_sample
+
+    def train_epoch(self, device: torch.device, dataloader: torch.utils.data.DataLoader,
+                    optimizer: torch.optim.Optimizer) -> np.ndarray:
+        self.train()
+        train_loss = []
+        for image_batch, _ in tqdm(dataloader, unit="batches", leave=False):
+            image_batch = image_batch.to(device)
+            recon_batch, latent_dist, latent_batch = self.forward(image_batch)
+            loss = self.loss_f(image_batch, recon_batch, latent_dist,
+                               is_train=True, storer=None, latent_sample=latent_batch)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            train_loss.append(loss.detach().cpu().numpy())
+        return np.mean(train_loss)
+
+    def test_epoch(self, device: torch.device, dataloader: torch.utils.data.DataLoader):
+        self.eval()
+        test_loss = []
+        with torch.no_grad():
+            for image_batch, _ in dataloader:
+                image_batch = image_batch.to(device)
+                recon_batch, latent_dist, latent_batch = self.forward(image_batch)
+                loss = self.loss_f(image_batch, recon_batch, latent_dist,
+                                   is_train=True, storer=None, latent_sample=latent_batch)
+                test_loss.append(loss.cpu().numpy())
+        return np.mean(test_loss)
+
+    def fit(self, device: torch.device, train_loader: torch.utils.data.DataLoader,
+            test_loader: torch.utils.data.DataLoader, n_epoch: int = 30) -> None:
+        self.to(device)
+        optim = torch.optim.Adam(self.parameters(), lr=1e-03, weight_decay=1e-05)
+        for epoch in range(n_epoch):
+            train_loss = self.train_epoch(device, train_loader, optim)
+            test_loss = self.test_epoch(device, test_loader)
+            logging.info(f'Epoch {epoch + 1}/{n_epoch} \t '
+                         f'Train loss {train_loss:.3g} \t Test loss {test_loss:.3g} \t ')
 
 
 class ClassifierLatent(nn.Module):
@@ -179,64 +564,17 @@ class ClassifierLatent(nn.Module):
         return x
 
 
-def beta_vae_loss(recon_x: torch.Tensor, x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor,
-                  beta: float, dataset_size: int) -> torch.Tensor:
-
-    #recon_loss = F.binary_cross_entropy(recon_x.view(-1, 784), x.view(-1, 784), reduction='sum')
-    kld_weight = x.shape[0] / dataset_size
-    recon_loss = F.mse_loss(recon_x, x)
-    kld_loss = torch.mean(-0.5 * torch.sum(1 + logvar - mu ** 2 - logvar.exp(), dim = 1), dim = 0)
-    loss = recon_loss + beta * kld_weight * kld_loss
-
-    return loss
-
-
 def log_density_gaussian(x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor):
-        """
-        Computes the log pdf of the Gaussian with parameters mu and logvar at x
-        :param x: (Tensor) Point at whichGaussian PDF is to be evaluated
-        :param mu: (Tensor) Mean of the Gaussian distribution
-        :param logvar: (Tensor) Log variance of the Gaussian distribution
-        :return:
-        """
-        norm = - 0.5 * (math.log(2 * math.pi) + logvar)
-        log_density = norm - 0.5 * ((x - mu) ** 2 * torch.exp(-logvar))
-        return log_density
-
-
-def beta_tcvae_loss_function(recon_x: torch.Tensor, x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor,
-                             z: torch.Tensor, beta: float, dataset_size: int) -> torch.Tensor:
-
-    #recon_loss = F.binary_cross_entropy(recon_x.view(-1, 784), x.view(-1, 784), reduction='sum')
-    recon_loss = F.mse_loss(recon_x, x, reduction='sum')
-    log_q_zx = log_density_gaussian(z, mu, logvar).sum(dim=1)
-
-    zeros = torch.zeros_like(z)
-    log_p_z = log_density_gaussian(z, zeros, zeros).sum(dim=1)
-
-    batch_size, latent_dim = z.shape
-    mat_log_q_z = log_density_gaussian(z.view(batch_size, 1, latent_dim),
-                                       mu.view(1, batch_size, latent_dim),
-                                       logvar.view(1, batch_size, latent_dim))
-
-    strat_weight = (dataset_size - batch_size + 1) / (dataset_size * (batch_size - 1))
-    importance_weights = torch.Tensor(batch_size, batch_size).fill_(1 / (batch_size - 1)).to(x.device)
-    importance_weights.view(-1)[::batch_size] = 1 / dataset_size
-    importance_weights.view(-1)[1::batch_size] = strat_weight
-    importance_weights[batch_size - 2, 0] = strat_weight
-    log_importance_weights = importance_weights.log()
-
-    mat_log_q_z += log_importance_weights.view(batch_size, batch_size, 1)
-
-    log_q_z = torch.logsumexp(mat_log_q_z.sum(2), dim=1, keepdim=False)
-    log_prod_q_z = torch.logsumexp(mat_log_q_z, dim=1, keepdim=False).sum(1)
-
-    mi_loss = (log_q_zx - log_q_z).mean()
-    tc_loss = (log_q_z - log_prod_q_z).mean()
-    kld_loss = (log_prod_q_z - log_p_z).mean()
-
-    loss = recon_loss / batch_size + mi_loss + beta * tc_loss + kld_loss
-    return loss
+    """
+    Computes the log pdf of the Gaussian with parameters mu and logvar at x
+    :param x: (Tensor) Point at whichGaussian PDF is to be evaluated
+    :param mu: (Tensor) Mean of the Gaussian distribution
+    :param logvar: (Tensor) Log variance of the Gaussian distribution
+    :return:
+    """
+    norm = - 0.5 * (math.log(2 * math.pi) + logvar)
+    log_density = norm - 0.5 * ((x - mu) ** 2 * torch.exp(-logvar))
+    return log_density
 
 
 def train_denoiser_epoch(encoder: EncoderMnist, decoder: DecoderMnist, device: torch.device,
@@ -334,60 +672,4 @@ def test_classifier_epoch(classifier: ClassifierMnist, device: torch.device, dat
     return val_loss.data
 
 
-def train_beta_vae_epoch(vae: VariationalAutoencoderMnist, device: torch.device, dataloader: torch.utils.data.DataLoader,
-                         optimizer: torch.optim.Optimizer, beta: float = 1, dataset_size: int = 60000):
-    vae.train()
-    train_loss = []
-    for image_batch, _ in dataloader:
-        image_batch = image_batch.to(device)
-        recon_batch, mu_batch, logvar_batch, _ = vae(image_batch)
-        loss = beta_vae_loss(recon_batch, image_batch, mu_batch, logvar_batch, beta, dataset_size)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        train_loss.append(loss.detach().cpu().numpy())
-    return np.mean(train_loss)
 
-
-def test_beta_vae_epoch(vae: VariationalAutoencoderMnist, device: torch.device, dataloader: torch.utils.data.DataLoader,
-                        beta: float = 1, dataset_size: int = 10000):
-    vae.eval()
-    test_loss = []
-    with torch.no_grad():
-        for image_batch, _ in dataloader:
-            image_batch = image_batch.to(device)
-            recon_batch, mu_batch, logvar_batch, _ = vae(image_batch)
-            loss = beta_vae_loss(recon_batch, image_batch, mu_batch, logvar_batch, beta, dataset_size)
-            test_loss.append(loss.cpu().numpy())
-    return np.mean(test_loss)
-
-
-def train_beta_tcvae_epoch(vae: VariationalAutoencoderMnist, device: torch.device,
-                           dataloader: torch.utils.data.DataLoader, optimizer: torch.optim.Optimizer,
-                           beta: float = 1, dataset_size: int = 60000):
-    vae.train()
-    train_loss = []
-    for image_batch, _ in dataloader:
-        image_batch = image_batch.to(device)
-        recon_batch, mu_batch, logvar_batch, latent_batch = vae(image_batch)
-        loss = beta_tcvae_loss_function(recon_batch, image_batch, mu_batch, logvar_batch,
-                                        latent_batch, beta, dataset_size)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        train_loss.append(loss.detach().cpu().numpy())
-    return np.mean(train_loss)
-
-
-def test_beta_tcvae_epoch(vae: VariationalAutoencoderMnist, device: torch.device,
-                          dataloader: torch.utils.data.DataLoader, beta: float = 1, dataset_size: int = 10000):
-    vae.eval()
-    test_loss = []
-    with torch.no_grad():
-        for image_batch, _ in dataloader:
-            image_batch = image_batch.to(device)
-            recon_batch, mu_batch, logvar_batch, latent_batch = vae(image_batch)
-            loss = beta_tcvae_loss_function(recon_batch, image_batch, mu_batch, logvar_batch,
-                                            latent_batch, beta, dataset_size)
-            test_loss.append(loss.cpu().numpy())
-    return np.mean(test_loss)

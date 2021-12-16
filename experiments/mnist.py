@@ -1,4 +1,5 @@
 import os
+import logging
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,12 +9,14 @@ import torchvision
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
-from scipy.stats import pearsonr
-
+from scipy.stats import pearsonr, spearmanr
 from explanations.features import AuxiliaryFunction, attribute_auxiliary
-from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, VariationalAutoencoderMnist,\
-    train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, \
-    train_beta_vae_epoch, test_beta_vae_epoch, train_beta_tcvae_epoch, test_beta_tcvae_epoch
+from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, BetaVaeMnist, BetaTcVaeMnist,\
+    train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, VAE, EncoderBurgess,\
+    DecoderBurgess
+from models.losses import BetaHLoss, BtcvaeLoss
+from utils.math import off_diagonal_sum
+
 
 
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
@@ -236,10 +239,11 @@ def track_importance(random_seed: int = 1, batch_size: int = 200,
 
 
 def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
-                           dim_latent: int = 2, n_epochs: int = 10, beta: float = 1) -> None:
+                           dim_latent: int = 2, n_epochs: int = 1, beta_list: list = [1, 2, 5, 10]) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    model_names = [r"$\beta$-VAE", r"$\beta$-TCVAE"]
 
     # Load MNIST
     data_dir = Path.cwd() / "data/mnist"
@@ -252,59 +256,121 @@ def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    # Initialize autoencoder
-    vae = VariationalAutoencoderMnist(dim_latent)
-    vae.to(device)
+    for beta in beta_list:
+        logging.info(f"Now working with beta = {beta}...")
 
-    # Initialize optimizer
-    params_to_optimize = [
-        {'params': vae.parameters()},
-    ]
-    optim = torch.optim.Adam(params_to_optimize, lr=1e-03, weight_decay=1e-05)
+        # Initialize vaes
+        vae = BetaVaeMnist(dim_latent, beta).cpu()
+        tcvae = BetaTcVaeMnist(dim_latent, beta).cpu()
+        for id_model, model in enumerate([vae, tcvae]):
+            logging.info(f"Now fitting model {model_names[id_model]}...")
+            model.fit(device, train_loader, test_loader, n_epochs)
 
-    # Train the denoising autoencoder
-    loss_hist = {'train_loss': [], 'val_loss': []}
+            test_images = next(iter(test_loader))[0].to(device)
+            test_image = test_images[1:2]
+            latent_rep = model.encoder.mu(test_image).detach().cpu().numpy().reshape(dim_latent)
+            baseline_image = torch.zeros(test_image.shape, device=device)
+            gradshap = GradientShap(model.encoder.mu)
+            attributions = []
+            W = 28
+            cblind_palette = sns.color_palette("colorblind")
+            fig = plt.figure(figsize=(10, 10))
 
-    for epoch in range(n_epochs):
-        train_loss = train_beta_vae_epoch(vae, device, train_loader, optim, beta)
-        val_loss = test_beta_vae_epoch(vae, device, test_loader, beta)
-        loss_hist['train_loss'].append(train_loss)
-        loss_hist['val_loss'].append(val_loss)
+            for image_batch, _ in test_loader:
+                image_batch = image_batch.to(device)
+                attributions_batch = []
+                for dim in range(dim_latent):
+                    attribution = gradshap.attribute(image_batch, baseline_image, target=dim).detach().cpu().numpy()
+                    attributions_batch.append(np.reshape(attribution, (len(image_batch), 1, W, W)))
+                attributions.append(np.concatenate(attributions_batch, axis=1))
+            attributions = np.abs(np.concatenate(attributions))
+            corr = spearmanr(attributions[:, 0, :, :].flatten(),
+                             attributions[:, 1, :, :].flatten())[0]
+            logging.info(f"Model {model_names[id_model]} \t Beta {beta} \t Saliency Correlation {corr:.2g} ")
 
-        print(f'\n Epoch {epoch + 1}/{n_epochs} \t Train loss {train_loss:.3g} \t Val loss {val_loss:.3g} \t ')
+            for dim in range(dim_latent):
+                attribution = gradshap.attribute(test_image, baseline_image, target=dim).detach().cpu().numpy()
+                saliency = np.abs(latent_rep[dim]*attribution)
+                ax = fig.add_subplot(3, 3, dim+1)
+                h = sns.heatmap(np.reshape(saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False, ax=ax,
+                                cmap=sns.dark_palette(cblind_palette[dim], as_cmap=True), cbar=True, alpha=0.7, zorder=2)
+                h.imshow(np.reshape(test_image.cpu().numpy(), (W, W)), zorder=1,
+                         cmap=sns.color_palette("dark:white", as_cmap=True))
+            #plt.show()
 
-    test_images = next(iter(test_loader))[0].to(device)
-    test_image = test_images[1:2]
-    latent_rep = vae.encoder.mu(test_image).detach().cpu().numpy().reshape(dim_latent)
-    baseline_image = torch.zeros(test_image.shape, device=device)
-    gradshap = GradientShap(vae.encoder.mu)
-    attributions = []
-    W = 28
-    cblind_palette = sns.color_palette("colorblind")
-    fig = plt.figure(figsize=(10, 10))
 
-    for image_batch, _ in test_loader:
-        image_batch = image_batch.to(device)
-        latent_batch = vae.encoder.mu(image_batch).detach().cpu().numpy().reshape((len(image_batch), dim_latent, 1, 1))
-        attributions_batch = []
-        for dim in range(dim_latent):
-            attribution = gradshap.attribute(image_batch, baseline_image, target=dim).detach().cpu().numpy()
-            attributions_batch.append(np.reshape(attribution, (len(image_batch), 1, W, W)))
-        attributions.append(np.concatenate(attributions_batch, axis=1))
-    attributions = np.concatenate(attributions)
-    metric = pearsonr(attributions[:, 0, :, :].flatten(), attributions[:, 1, :, :].flatten())
-    print(metric)
+def disvae_feature_importance(random_seed: int = 1, batch_size: int = 200, n_plots: int = 10,
+                              dim_latent: int = 5, n_epochs: int = 20, beta_list: list = [0, 1e-1, 1, 5, 10]) -> None:
+    # Initialize seed and device
+    torch.random.manual_seed(random_seed)
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    loss_types = ["betaH",  "btcvae"]
+    W = 32
+    img_size = (1, W, W)
 
-    for dim in range(dim_latent):
-        attribution = gradshap.attribute(test_image, baseline_image, target=dim).detach().cpu().numpy()
-        saliency = np.abs(latent_rep[dim]*attribution)
-        ax = fig.add_subplot(3, 3, dim+1)
-        h = sns.heatmap(np.reshape(saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False, ax=ax,
-                        cmap=sns.dark_palette(cblind_palette[dim], as_cmap=True), cbar=True, alpha=0.7, zorder=2)
-        h.imshow(np.reshape(test_image.cpu().numpy(), (W, W)), zorder=1,
-                 cmap=sns.color_palette("dark:white", as_cmap=True))
-    plt.show()
+    # Load MNIST
+    data_dir = Path.cwd() / "data/mnist"
+    train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
+    test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
+    train_transform = transforms.Compose([
+                             transforms.Resize(W),
+                             transforms.ToTensor()
+                         ])
+    test_transform = transforms.Compose([
+                             transforms.Resize(W),
+                             transforms.ToTensor()
+                         ])
+    train_dataset.transform = train_transform
+    test_dataset.transform = test_transform
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    for beta in beta_list:
+        logging.info(f"Now working with beta = {beta}...")
+
+        # Initialize vaes
+        encoder = EncoderBurgess(img_size, dim_latent)
+        decoder = DecoderBurgess(img_size, dim_latent)
+        loss_f = BtcvaeLoss(beta, is_mss=False)
+        model = VAE(img_size, encoder, decoder, dim_latent, loss_f)
+        logging.info(f"Now fitting model...")
+        model.fit(device, train_loader, test_loader, n_epochs)
+
+        baseline_image = torch.zeros((1, 1, W, W), device=device)
+        gradshap = GradientShap(encoder.mu)
+        attributions = []
+
+        for image_batch, _ in test_loader:
+            image_batch = image_batch.to(device)
+            attributions_batch = []
+            for dim in range(dim_latent):
+                attribution = gradshap.attribute(image_batch, baseline_image, target=dim).detach().cpu().numpy()
+                attributions_batch.append(np.reshape(attribution, (len(image_batch), 1, W, W)))
+            attributions.append(np.concatenate(attributions_batch, axis=1))
+        attributions = np.abs(np.concatenate(attributions))
+        corr = np.corrcoef(attributions.swapaxes(1, -1).reshape(-1, dim_latent))[0]
+        metric = off_diagonal_sum(corr)/(dim_latent*(dim_latent-1))
+        """
+        corr = spearmanr(attributions[:, 0, :, :].flatten(),
+                        attributions[:, 1, :, :].flatten())[0]
+        """
+        logging.info(f"Model  \t Beta {beta} \t Spearman Correlation {metric:.2g} ")
+        cblind_palette = sns.color_palette("colorblind")
+        fig, axs = plt.subplots(ncols=dim_latent, nrows=n_plots, figsize=(4*dim_latent, 4*n_plots))
+        for example_id in range(n_plots):
+            max_saliency = np.max(attributions[example_id, :, :, :])
+            for dim in range(dim_latent):
+                sub_saliency = attributions[example_id, dim, :, :]
+                ax = axs[example_id, dim]
+                h = sns.heatmap(np.reshape(sub_saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
+                                ax=ax,cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=True,
+                                alpha=1, zorder=2, vmin=0, vmax=max_saliency)
+        save_dir = Path.cwd() / "results/mnist/vae"
+        if not save_dir.exists():
+            os.makedirs(save_dir)
+        plt.savefig(save_dir/f"tcvae_{beta}.pdf")
 
 
 if __name__ == "__main__":
-    vae_feature_importance()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    disvae_feature_importance()
