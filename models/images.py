@@ -527,14 +527,25 @@ class VAE(nn.Module):
         return np.mean(test_loss)
 
     def fit(self, device: torch.device, train_loader: torch.utils.data.DataLoader,
-            test_loader: torch.utils.data.DataLoader, n_epoch: int = 30) -> None:
+            test_loader: torch.utils.data.DataLoader, n_epoch: int = 30, patience: int = 10) -> None:
         self.to(device)
         optim = torch.optim.Adam(self.parameters(), lr=1e-03, weight_decay=1e-05)
+        waiting_epoch = 0
+        previous_test_loss = 0
         for epoch in range(n_epoch):
             train_loss = self.train_epoch(device, train_loader, optim)
             test_loss = self.test_epoch(device, test_loader)
             logging.info(f'Epoch {epoch + 1}/{n_epoch} \t '
                          f'Train loss {train_loss:.3g} \t Test loss {test_loss:.3g} \t ')
+            if epoch > 1 and test_loss >= previous_test_loss:
+                waiting_epoch += 1
+            else:
+                waiting_epoch = 0
+            if waiting_epoch == patience:
+                logging.info(f'Early stopping activated')
+                break
+            previous_test_loss = test_loss
+
 
 
 class ClassifierLatent(nn.Module):

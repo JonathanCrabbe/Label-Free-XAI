@@ -1,7 +1,7 @@
 import numpy as np
-
 import math
 import torch
+from scipy.stats import entropy
 
 
 def matrix_log_density_gaussian(x, mu, logvar):
@@ -67,7 +67,7 @@ def off_diagonal_sum(mat: np.ndarray) -> np.ndarray:
     return np.sum(mat) - np.trace(mat)
 
 
-def cos_saliency(saliency: np.ndarray) -> np.ndarray:
+def cos_saliency(saliency: np.ndarray) -> tuple:
     latent_dim = saliency.shape[1]
     cos_avg = np.ones((latent_dim, latent_dim))
     cos_std = np.ones((latent_dim, latent_dim))
@@ -82,3 +82,23 @@ def cos_saliency(saliency: np.ndarray) -> np.ndarray:
             cos_avg[dim2, dim1] = cos_avg[dim1, dim2]
             cos_std[dim2, dim1] = cos_std[dim1, dim2]
     return cos_avg, cos_std
+
+
+def entropy_saliency(saliency: np.ndarray) -> tuple:
+    latent_dim = saliency.shape[1]
+    saliency_reshaped = np.reshape(saliency.swapaxes(1, -1), (-1, latent_dim))
+    salient_pixels = saliency_reshaped.sum(1) > 0
+    saliency_filtered = saliency_reshaped[salient_pixels]
+    entropy_ar = entropy(saliency_filtered, axis=1)
+    return np.mean(entropy_ar), np.std(entropy_ar)
+
+
+def count_activated_neurons(saliency: np.ndarray) -> tuple:
+    latent_dim = saliency.shape[1]
+    saliency_reshaped = np.reshape(saliency.swapaxes(1, -1), (-1, latent_dim))
+    salient_pixels = saliency_reshaped.sum(1) > 0
+    saliency_filtered = saliency_reshaped[salient_pixels]
+    activated_neurons = saliency_filtered/saliency_filtered.sum(1, keepdims=True) > 1/latent_dim
+    n_activated_neurons = np.count_nonzero(activated_neurons, axis=1)
+    return np.mean(n_activated_neurons), np.std(n_activated_neurons)
+
