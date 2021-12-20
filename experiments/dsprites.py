@@ -20,7 +20,7 @@ from utils.datasets import DSprites
 
 
 def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plots: int = 20,
-                              dim_latent: int = 6, n_epochs: int = 100, beta_list: list = [1, 2, 5, 7, 10],
+                              dim_latent: int = 6, n_epochs: int = 100, beta_list: list = [1, 5, 10],
                               test_split=0.1) -> None:
     # Initialize seed and device
     np.random.seed(random_seed)
@@ -39,17 +39,23 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plo
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
+    # Create saving directory
+    save_dir = Path.cwd() / "results/dsprites/vae"
+    if not save_dir.exists():
+        os.makedirs(save_dir)
+
     for beta in beta_list:
         logging.info(f"Now working with beta {beta}")
 
         # Initialize vaes
+        name = "model"
         encoder = EncoderBurgess(img_size, dim_latent)
         decoder = DecoderBurgess(img_size, dim_latent)
-        loss_f = BtcvaeLoss(beta, is_mss=False)
-        model = VAE(img_size, encoder, decoder, dim_latent, loss_f)
-        logging.info(f"Now fitting model")
-        model.fit(device, train_loader, test_loader, n_epochs)
-
+        loss_f = BtcvaeLoss(n_data=train_size, beta=beta, is_mss=False)
+        model = VAE(img_size, encoder, decoder, dim_latent, loss_f, name=name)
+        logging.info(f"Now fitting {name}")
+        model.fit(device, train_loader, test_loader, save_dir, n_epochs)
+        model.load_state_dict(torch.load(save_dir / (name + ".pt")), strict=False)
         baseline_image = torch.zeros((1, 1, W, W), device=device)
         gradshap = GradientShap(encoder.mu)
         attributions = []
@@ -81,9 +87,7 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plo
                 h = sns.heatmap(np.reshape(sub_saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
                                 ax=ax, cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=True,
                                 alpha=1, zorder=2, vmin=0, vmax=max_saliency)
-        save_dir = Path.cwd() / "results/dsprites/vae"
-        if not save_dir.exists():
-            os.makedirs(save_dir)
+
         plt.savefig(save_dir/f"tcvae_{beta}.pdf")
 
 

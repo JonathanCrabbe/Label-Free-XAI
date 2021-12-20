@@ -6,10 +6,9 @@ from torch.nn import functional as F
 from torch import optim
 
 from utils.math import (log_density_gaussian, log_importance_weight_matrix,
-                               matrix_log_density_gaussian)
+                        matrix_log_density_gaussian)
 
-
-LOSSES = ["betaH",  "btcvae"]
+LOSSES = ["betaH", "btcvae"]
 RECON_DIST = ["bernoulli", "laplace", "gaussian"]
 
 
@@ -53,6 +52,13 @@ class BaseVAELoss(abc.ABC):
         self.record_loss_every = record_loss_every
         self.rec_dist = rec_dist
         self.steps_anneal = steps_anneal
+
+    @abc.abstractmethod
+    def __str__(self) -> str:
+        """
+        Returns: Name of the loss
+        """
+
 
     @abc.abstractmethod
     def __call__(self, data, recon_data, latent_dist, is_train, storer, **kwargs):
@@ -122,6 +128,9 @@ class BetaHLoss(BaseVAELoss):
             storer['loss'].append(loss.item())
 
         return loss
+
+    def __str__(self):
+        return "Beta Loss"
 
 
 class BtcvaeLoss(BaseVAELoss):
@@ -193,6 +202,9 @@ class BtcvaeLoss(BaseVAELoss):
             _ = _kl_normal_loss(*latent_dist, storer)
 
         return loss
+
+    def __str__(self):
+        return "Beta TC Loss"
 
 
 def _reconstruction_loss(data, recon_data, distribution="bernoulli", storer=None):
@@ -335,5 +347,3 @@ def _get_log_pz_qz_prodzi_qzCx(latent_sample, latent_dist, n_data, is_mss=True):
     log_prod_qzi = torch.logsumexp(mat_log_qz, dim=1, keepdim=False).sum(1)
 
     return log_pz, log_qz, log_prod_qzi, log_q_zCx
-
-

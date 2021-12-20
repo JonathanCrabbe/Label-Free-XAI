@@ -3,9 +3,12 @@ import torch
 import numpy as np
 import math
 import logging
+import pathlib
+import json
 from torch import nn
 from models.losses import BaseVAELoss
 from tqdm import tqdm
+
 
 '''
  These models are adapted from 
@@ -14,6 +17,13 @@ from tqdm import tqdm
  https://github.com/AntixK/PyTorch-VAE
 '''
 
+
+def init_vae(img_size, latent_dim, loss_f, name):
+    """Return an instance of a VAE with encoder and decoder from `model_type`."""
+    encoder = EncoderBurgess(img_size, latent_dim)
+    decoder = DecoderBurgess(img_size, latent_dim)
+    model = VAE(img_size, encoder, decoder, latent_dim, loss_f, name)
+    return model
 
 class EncoderMnist(nn.Module):
     def __init__(self, encoded_space_dim, fc2_input_dim):
@@ -438,8 +448,8 @@ class DecoderBurgess(nn.Module):
 
 
 class VAE(nn.Module):
-    def __init__(self, img_size: tuple, encoder: EncoderBurgess,
-                 decoder: DecoderBurgess, latent_dim: int, loss_f: BaseVAELoss):
+    def __init__(self, img_size: tuple, encoder: EncoderBurgess, decoder: DecoderBurgess,
+                 latent_dim: int, loss_f: BaseVAELoss, name: str = "model"):
         """
         Class which defines model and forward pass.
         Parameters
@@ -454,6 +464,7 @@ class VAE(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
         self.loss_f = loss_f
+        self.name = name
 
     def reparameterize(self, mean, logvar):
         """
@@ -527,25 +538,74 @@ class VAE(nn.Module):
         return np.mean(test_loss)
 
     def fit(self, device: torch.device, train_loader: torch.utils.data.DataLoader,
-            test_loader: torch.utils.data.DataLoader, n_epoch: int = 30, patience: int = 10) -> None:
+            test_loader: torch.utils.data.DataLoader, save_dir: pathlib.Path,
+            n_epoch: int = 30, patience: int = 10) -> None:
         self.to(device)
         optim = torch.optim.Adam(self.parameters(), lr=1e-03, weight_decay=1e-05)
         waiting_epoch = 0
-        previous_test_loss = 0
+        best_test_loss = float("inf")
         for epoch in range(n_epoch):
             train_loss = self.train_epoch(device, train_loader, optim)
             test_loss = self.test_epoch(device, test_loader)
             logging.info(f'Epoch {epoch + 1}/{n_epoch} \t '
                          f'Train loss {train_loss:.3g} \t Test loss {test_loss:.3g} \t ')
-            if epoch > 1 and test_loss >= previous_test_loss:
+            if test_loss >= best_test_loss:
                 waiting_epoch += 1
+                logging.info(f'No improvement over the best epoch \t Patience Counter {waiting_epoch} / {patience}')
             else:
+                logging.info(f'Saving the model in {save_dir}')
+                self.cpu()
+                self.save(save_dir)
+                self.to(device)
+                best_test_loss = test_loss.data
                 waiting_epoch = 0
             if waiting_epoch == patience:
                 logging.info(f'Early stopping activated')
                 break
-            previous_test_loss = test_loss
 
+    def save(self, directory: pathlib.Path) -> None:
+        """
+        Save a model and corresponding metadata.
+        Parameters
+        ----------
+        directory : pathlib.Path
+            Path to the directory where to save the data.
+        """
+        model_name = self.name
+        self.save_metadata(directory)
+        path_to_model = directory / (model_name + ".pt")
+        torch.save(self.state_dict(), path_to_model)
+
+
+    def load_metadata(self, directory: pathlib.Path) -> dict:
+        """Load the metadata of a training directory.
+        Parameters
+        ----------
+        directory : pathlib.Path
+            Path to folder where model is saved. For example './experiments/mnist'.
+        """
+        path_to_metadata = directory / (self.name + ".json")
+
+        with open(path_to_metadata) as metadata_file:
+            metadata = json.load(metadata_file)
+        return metadata
+
+    def save_metadata(self, directory: pathlib.Path, **kwargs) -> None:
+        """Load the metadata of a training directory.
+        Parameters
+        ----------
+        directory: string
+            Path to folder where to save model. For example './experiments/mnist'.
+        kwargs:
+            Additional arguments to `json.dump`
+        """
+        path_to_metadata = directory / (self.name + ".json")
+        metadata = {"latent_dim": self.latent_dim,
+                    "img_size": self.img_size,
+                    "num_pixels": self.num_pixels,
+                    "name": self.name}
+        with open(path_to_metadata, 'w') as f:
+            json.dump(metadata, f, indent=4, sort_keys=True, **kwargs)
 
 
 class ClassifierLatent(nn.Module):
