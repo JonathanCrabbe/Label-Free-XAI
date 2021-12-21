@@ -12,12 +12,13 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from scipy.stats import pearsonr, spearmanr
 from explanations.features import AuxiliaryFunction, attribute_auxiliary, attribute_individual_dim
-from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, BetaVaeMnist, BetaTcVaeMnist,\
-    train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, VAE, EncoderBurgess,\
+from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, BetaVaeMnist, BetaTcVaeMnist, \
+    train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, VAE, EncoderBurgess, \
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
 from utils.math import off_diagonal_sum, cos_saliency, entropy_saliency, \
-count_activated_neurons, correlation_saliency, compute_metrics
+    count_activated_neurons, correlation_saliency, compute_metrics
+from utils.images import plot_vae_saliencies
 
 
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
@@ -98,11 +99,12 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
                         attr_batch.detach().cpu().numpy()
                 elif explainer == "Random":
                     for batch_id in range(len(batch_images)):
-                        top_pixels = torch.randperm(28**2)[:n_pixels]
+                        top_pixels = torch.randperm(28 ** 2)[:n_pixels]
                         for k in range(n_pixels):
                             mask[batch_id, 0, top_pixels[k] // 28, top_pixels[k] % 28] = 0
-                batch_images_pert = mask*batch_images
-                representation_shift = torch.sqrt(torch.sum((encoder(batch_images_pert)-encoder(batch_images))**2, -1))
+                batch_images_pert = mask * batch_images
+                representation_shift = torch.sqrt(
+                    torch.sum((encoder(batch_images_pert) - encoder(batch_images)) ** 2, -1))
                 rep_shift_dic[explainer][pert_id, n_batch] = torch.mean(representation_shift).cpu().detach().numpy()
 
     sns.set_style("white")
@@ -117,7 +119,7 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
     results_dir = Path.cwd() / "results/mnist/consistency/"
     if not results_dir.exists():
         os.makedirs(results_dir)
-    plt.savefig(results_dir/"pixel_pert.pdf")
+    plt.savefig(results_dir / "pixel_pert.pdf")
     plt.show()
 
 
@@ -136,8 +138,8 @@ def track_importance(random_seed: int = 1, batch_size: int = 200,
     test_transform = transforms.Compose([transforms.ToTensor()])
     train_dataset.transform = train_transform
     test_dataset.transform = test_transform
-    pretrain_size = int(pretrain_ratio*len(train_dataset))
-    pretrain_dataset, train_dataset = random_split(train_dataset, [pretrain_size, len(train_dataset)-pretrain_size])
+    pretrain_size = int(pretrain_ratio * len(train_dataset))
+    pretrain_dataset, train_dataset = random_split(train_dataset, [pretrain_size, len(train_dataset) - pretrain_size])
     pretrain_loader = torch.utils.data.DataLoader(pretrain_dataset, batch_size=batch_size)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
@@ -200,12 +202,8 @@ def track_importance(random_seed: int = 1, batch_size: int = 200,
     train_attribution = attribute_auxiliary(encoder, test_loader, device, grad_shap, baseline_features)
 
     # Compute the attribution deltas
-    print(f'Initial vs Pretrained Attribution Delta: {np.mean(np.abs(pretrain_attribution-initial_attribution)):.3g}')
-    print(f'Pretrained vs Trained Attribution Delta: {np.mean(np.abs(train_attribution-pretrain_attribution)):.3g}')
-
-
-
-
+    print(f'Initial vs Pretrained Attribution Delta: {np.mean(np.abs(pretrain_attribution - initial_attribution)):.3g}')
+    print(f'Pretrained vs Trained Attribution Delta: {np.mean(np.abs(train_attribution - pretrain_attribution)):.3g}')
 
     '''
     ig_explainer = IntegratedGradients(auxiliary_encoder)
@@ -292,13 +290,14 @@ def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
 
             for dim in range(dim_latent):
                 attribution = gradshap.attribute(test_image, baseline_image, target=dim).detach().cpu().numpy()
-                saliency = np.abs(latent_rep[dim]*attribution)
-                ax = fig.add_subplot(3, 3, dim+1)
+                saliency = np.abs(latent_rep[dim] * attribution)
+                ax = fig.add_subplot(3, 3, dim + 1)
                 h = sns.heatmap(np.reshape(saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False, ax=ax,
-                                cmap=sns.dark_palette(cblind_palette[dim], as_cmap=True), cbar=True, alpha=0.7, zorder=2)
+                                cmap=sns.dark_palette(cblind_palette[dim], as_cmap=True), cbar=True, alpha=0.7,
+                                zorder=2)
                 h.imshow(np.reshape(test_image.cpu().numpy(), (W, W)), zorder=1,
                          cmap=sns.color_palette("dark:white", as_cmap=True))
-            #plt.show()
+            # plt.show()
 
 
 def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plots: int = 20,
@@ -351,26 +350,14 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
         logging.info(f"Model {name} \t {results_str}")
 
         # Produce a couple of plot examples
-        cblind_palette = sns.color_palette("colorblind")
-        fig, axs = plt.subplots(ncols=dim_latent, nrows=n_plots, figsize=(4*dim_latent, 4*n_plots))
-        for example_id in range(n_plots):
-            test_id = torch.nonzero(test_dataset.targets == (example_id % 10))[example_id // 10]
-            max_saliency = np.max(attributions[test_id])
-            for dim in range(dim_latent):
-                sub_saliency = attributions[test_id, dim, :, :]
-                ax = axs[example_id, dim]
-                h = sns.heatmap(np.reshape(sub_saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
-                                ax=ax, cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=True,
-                                alpha=1, zorder=2, vmin=0, vmax=max_saliency)
-
-        plt.savefig(save_dir/f"{name}.pdf")
+        plot_idx = [torch.nonzero(test_dataset.targets == (n % 10))[n // 10].item() for n in range(n_plots)]
+        fig = plot_vae_saliencies(attributions[plot_idx])
+        fig.savefig(save_dir / f"{name}.pdf")
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     disvae_feature_importance()
-
-
 
 """
         attributions = []
@@ -386,4 +373,18 @@ if __name__ == "__main__":
         latents = np.concatenate(latents)
         attributions = np.concatenate(attributions)
         attributions = np.abs(np.expand_dims(latents, (2, 3)) * attributions)
-        """
+        
+        
+        
+        cblind_palette = sns.color_palette("colorblind")
+        fig, axs = plt.subplots(ncols=dim_latent, nrows=n_plots, figsize=(4 * dim_latent, 4 * n_plots))
+        for example_id in range(n_plots):
+            test_id = torch.nonzero(test_dataset.targets == (example_id % 10))[example_id // 10]
+            max_saliency = np.max(attributions[test_id])
+            for dim in range(dim_latent):
+                sub_saliency = attributions[test_id, dim, :, :]
+                ax = axs[example_id, dim]
+                h = sns.heatmap(np.reshape(sub_saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
+                                ax=ax, cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=True,
+                                alpha=1, zorder=2, vmin=0, vmax=max_saliency)
+"""
