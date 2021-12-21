@@ -6,11 +6,12 @@ import numpy as np
 import seaborn as sns
 import torch
 import torchvision
+import itertools
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from scipy.stats import pearsonr, spearmanr
-from explanations.features import AuxiliaryFunction, attribute_auxiliary
+from explanations.features import AuxiliaryFunction, attribute_auxiliary, attribute_individual_dim
 from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, BetaVaeMnist, BetaTcVaeMnist,\
     train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, VAE, EncoderBurgess,\
     DecoderBurgess
@@ -285,6 +286,7 @@ def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
             attributions = np.abs(np.concatenate(attributions))
             corr = spearmanr(attributions[:, 0, :, :].flatten(),
                              attributions[:, 1, :, :].flatten())[0]
+
             logging.info(f"Model {model_names[id_model]} \t Beta {beta} \t Saliency Correlation {corr:.2g} ")
 
             for dim in range(dim_latent):
@@ -299,17 +301,16 @@ def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
 
 
 def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plots: int = 20,
-                              dim_latent: int = 3, n_epochs: int = 100, beta_list: list = [1, 5, 10]) -> None:
+                              dim_latent: int = 3, n_epochs: int = 1, beta_list: list = [1, 5, 10]) -> None:
     # Initialize seed and device
     np.random.seed(random_seed)
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    loss_types = ["betaH",  "btcvae"]
-    W = 32
-    img_size = (1, W, W)
 
 
     # Load MNIST
+    W = 32
+    img_size = (1, W, W)
     data_dir = Path.cwd() / "data/mnist"
     train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
     test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
@@ -331,43 +332,29 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
     if not save_dir.exists():
         os.makedirs(save_dir)
 
-    for beta in beta_list:
+    loss_list = [BetaHLoss(), BtcvaeLoss(is_mss=False, n_data=len(train_dataset))]
+    for beta, loss in itertools.product(beta_list, loss_list):
         logging.info(f"Now working with beta {beta}")
 
         # Initialize vaes
-        name = "model"
         encoder = EncoderBurgess(img_size, dim_latent)
         decoder = DecoderBurgess(img_size, dim_latent)
-        loss_f = BtcvaeLoss(n_data=len(train_dataset), beta=beta, is_mss=False)
-        model = VAE(img_size, encoder, decoder, dim_latent, loss_f, name="model")
-        logging.info(f"Now fitting model")
+        loss.beta = beta
+        name = f'{str(loss)}-vae_beta{beta}'
+        model = VAE(img_size, encoder, decoder, dim_latent, loss, name=name)
+        logging.info(f"Now fitting {name}")
         model.fit(device, train_loader, test_loader, save_dir, n_epochs)
         model.load_state_dict(torch.load(save_dir / (name + ".pt")), strict=False)
+
         baseline_image = torch.zeros((1, 1, W, W), device=device)
         gradshap = GradientShap(encoder.mu)
-        attributions = []
-        latents = []
-
-        for image_batch, _ in test_loader:
-            image_batch = image_batch.to(device)
-            attributions_batch = []
-            latents.append(encoder.mu(image_batch).detach().cpu().numpy())
-            for dim in range(dim_latent):
-                attribution = gradshap.attribute(image_batch, baseline_image, target=dim).detach().cpu().numpy()
-                attributions_batch.append(np.reshape(attribution, (len(image_batch), 1, W, W)))
-            attributions.append(np.concatenate(attributions_batch, axis=1))
-        latents = np.concatenate(latents)
-        attributions = np.concatenate(attributions)
-        attributions = np.abs(np.expand_dims(latents, (2, 3)) * attributions)
+        attributions = attribute_individual_dim(encoder.mu, dim_latent, test_loader, device, gradshap, baseline_image)
         corr = np.corrcoef(attributions.swapaxes(0, 1).reshape(dim_latent, -1))
         metric = off_diagonal_sum(corr)/(dim_latent*(dim_latent-1))
-        activated_avg, activated_std = count_activated_neurons(attributions)
-        """
-        corr = spearmanr(attributions[:, 0, :, :].flatten(),
-                        attributions[:, 1, :, :].flatten())[0]
-        """
-        logging.info(f"Model  \t Beta {beta} \t Pearson Correlation {metric:.2g} \t"
-                     f" Active Neurons {activated_avg:.2g} +/- {activated_std:.2g} ")
+        activated_avg = count_activated_neurons(attributions)
+
+        logging.info(f"Model {name} \t Pearson Correlation {metric:.2g} \t"
+                     f" Active Neurons {activated_avg:.2g} ")
         cblind_palette = sns.color_palette("colorblind")
         fig, axs = plt.subplots(ncols=dim_latent, nrows=n_plots, figsize=(4*dim_latent, 4*n_plots))
         for example_id in range(n_plots):
@@ -380,9 +367,27 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
                                 ax=ax, cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=True,
                                 alpha=1, zorder=2, vmin=0, vmax=max_saliency)
 
-        plt.savefig(save_dir/f"tcvae_{beta}.pdf")
+        plt.savefig(save_dir/f"{name}.pdf")
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     disvae_feature_importance()
+
+
+
+"""
+        attributions = []
+        latents = []
+        for image_batch, _ in test_loader:
+            image_batch = image_batch.to(device)
+            attributions_batch = []
+            latents.append(encoder.mu(image_batch).detach().cpu().numpy())
+            for dim in range(dim_latent):
+                attribution = gradshap.attribute(image_batch, baseline_image, target=dim).detach().cpu().numpy()
+                attributions_batch.append(np.reshape(attribution, (len(image_batch), 1, W, W)))
+            attributions.append(np.concatenate(attributions_batch, axis=1))
+        latents = np.concatenate(latents)
+        attributions = np.concatenate(attributions)
+        attributions = np.abs(np.expand_dims(latents, (2, 3)) * attributions)
+        """

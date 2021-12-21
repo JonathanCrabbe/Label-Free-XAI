@@ -126,11 +126,10 @@ class BetaHLoss(BaseVAELoss):
 
         if storer is not None:
             storer['loss'].append(loss.item())
-
         return loss
 
     def __str__(self):
-        return "Beta Loss"
+        return "beta"
 
 
 class BtcvaeLoss(BaseVAELoss):
@@ -204,7 +203,7 @@ class BtcvaeLoss(BaseVAELoss):
         return loss
 
     def __str__(self):
-        return "Beta TC Loss"
+        return "tc"
 
 
 def _reconstruction_loss(data, recon_data, distribution="bernoulli", storer=None):

@@ -67,10 +67,9 @@ def off_diagonal_sum(mat: np.ndarray) -> np.ndarray:
     return np.sum(mat) - np.trace(mat)
 
 
-def cos_saliency(saliency: np.ndarray) -> tuple:
+def cos_saliency(saliency: np.ndarray) -> np.ndarray:
     latent_dim = saliency.shape[1]
     cos_avg = np.ones((latent_dim, latent_dim))
-    cos_std = np.ones((latent_dim, latent_dim))
     for dim1 in range(1, latent_dim):
         for dim2 in range(dim1):
             saliency_dim1, saliency_dim2 = saliency[:, dim1], saliency[:, dim2]
@@ -78,27 +77,25 @@ def cos_saliency(saliency: np.ndarray) -> tuple:
                                     np.sum(saliency_dim2**2, axis=(-2, -1)))
             cos_dim1_dim2 = np.sum(saliency_dim1*saliency_dim2, axis=(-2, -1))/normalization
             cos_avg[dim1, dim2] = np.mean(cos_dim1_dim2)
-            cos_std[dim1, dim2] = np.std(cos_dim1_dim2)
             cos_avg[dim2, dim1] = cos_avg[dim1, dim2]
-            cos_std[dim2, dim1] = cos_std[dim1, dim2]
-    return cos_avg, cos_std
+    return cos_avg
 
 
-def entropy_saliency(saliency: np.ndarray) -> tuple:
+def entropy_saliency(saliency: np.ndarray) -> np.ndarray:
     latent_dim = saliency.shape[1]
     saliency_reshaped = np.reshape(saliency.swapaxes(1, -1), (-1, latent_dim))
     salient_pixels = saliency_reshaped.sum(1) > 0
     saliency_filtered = saliency_reshaped[salient_pixels]
     entropy_ar = entropy(saliency_filtered, axis=1)
-    return np.mean(entropy_ar), np.std(entropy_ar)
+    return np.mean(entropy_ar)
 
 
-def count_activated_neurons(saliency: np.ndarray) -> tuple:
+def count_activated_neurons(saliency: np.ndarray) -> np.ndarray:
     latent_dim = saliency.shape[1]
     saliency_reshaped = np.reshape(saliency.swapaxes(1, -1), (-1, latent_dim))
     salient_pixels = saliency_reshaped.sum(1) > 0
     saliency_filtered = saliency_reshaped[salient_pixels]
     activated_neurons = saliency_filtered/saliency_filtered.sum(1, keepdims=True) > 1/latent_dim
     n_activated_neurons = np.count_nonzero(activated_neurons, axis=1)
-    return np.mean(n_activated_neurons), np.std(n_activated_neurons)
+    return np.mean(n_activated_neurons)
 
