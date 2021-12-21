@@ -302,7 +302,7 @@ def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
             # plt.show()
 
 
-def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plots: int = 20, n_runs: int = 10,
+def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plots: int = 20, n_runs: int = 5,
                               dim_latent: int = 3, n_epochs: int = 100, beta_list: list = [1, 5, 10]) -> None:
     # Initialize seed and device
     np.random.seed(random_seed)
@@ -367,7 +367,9 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
 
         # Plot a couple of examples
         plot_idx = [torch.nonzero(test_dataset.targets == (n % 10))[n // 10].item() for n in range(n_plots)]
-        fig = plot_vae_saliencies(attributions[plot_idx])
+        images_to_plot = [test_dataset[i][0].numpy().reshape(W, W) for i in plot_idx]
+        fig = plot_vae_saliencies(images_to_plot,
+                                  attributions[plot_idx])
         fig.savefig(save_dir / f"{name}.pdf")
 
     fig = vae_box_plots(pd.read_csv(csv_path), metric_names)

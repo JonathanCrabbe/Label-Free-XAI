@@ -4,33 +4,33 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+import pandas as pd
 import torch
-import torchvision
-from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
+import itertools
+import csv
+from captum.attr import GradientShap
 from torch.utils.data import DataLoader, random_split
-from torchvision import transforms
-from scipy.stats import pearsonr, spearmanr
-from explanations.features import AuxiliaryFunction, attribute_auxiliary
-from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, BetaVaeMnist, BetaTcVaeMnist,\
-    train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, VAE, EncoderBurgess,\
+from explanations.features import attribute_individual_dim
+from models.images import VAE, EncoderBurgess,\
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
-from utils.metrics import off_diagonal_sum, cos_saliency, entropy_saliency, count_activated_neurons
+from utils.metrics import off_diagonal_sum, cos_saliency, entropy_saliency,\
+    count_activated_neurons, correlation_saliency, compute_metrics
 from utils.datasets import DSprites
+from utils.visualize import vae_box_plots, plot_vae_saliencies
 
 
-def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plots: int = 20,
+def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plots: int = 20, n_runs: int = 5,
                               dim_latent: int = 6, n_epochs: int = 100, beta_list: list = [1, 5, 10],
                               test_split=0.1) -> None:
     # Initialize seed and device
     np.random.seed(random_seed)
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    loss_types = ["betaH",  "btcvae"]
-    W = 64
-    img_size = (1, W, W)
 
     # Load dsprites
+    W = 64
+    img_size = (1, W, W)
     data_dir = Path.cwd() / "data/dsprites"
     dsprites_dataset = DSprites(str(data_dir))
     test_size = int(test_split * len(dsprites_dataset))
@@ -44,19 +44,59 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plo
     if not save_dir.exists():
         os.makedirs(save_dir)
 
-    for beta in beta_list:
-        logging.info(f"Now working with beta {beta}")
+    # Define the computed metrics and create a csv file with appropriate headers
+    loss_list = [BetaHLoss(), BtcvaeLoss(is_mss=False, n_data=len(train_dataset))]
+    metric_list = [correlation_saliency, cos_saliency, entropy_saliency, count_activated_neurons]
+    metric_names = ["Correlation", "Cosine", "Entropy", "Active Neurons"]
+    headers = ["Loss Type", "Beta"] + metric_names
+    csv_path = save_dir / "metrics.csv"
+    if not csv_path.is_file():
+        logging.info(f"Creating metrics csv in {csv_path}")
+        with open(csv_path, 'w') as csv_file:
+            dw = csv.DictWriter(csv_file, delimiter=',', fieldnames=headers)
+            dw.writeheader()
 
+    for beta, loss, run in itertools.product(beta_list, loss_list, range(1, n_runs + 1)):
         # Initialize vaes
-        name = "model"
         encoder = EncoderBurgess(img_size, dim_latent)
         decoder = DecoderBurgess(img_size, dim_latent)
-        loss_f = BtcvaeLoss(n_data=train_size, beta=beta, is_mss=False)
-        model = VAE(img_size, encoder, decoder, dim_latent, loss_f, name=name)
+        loss.beta = beta
+        name = f'{str(loss)}-vae_beta{beta}_run{run}'
+        model = VAE(img_size, encoder, decoder, dim_latent, loss, name=name)
         logging.info(f"Now fitting {name}")
         model.fit(device, train_loader, test_loader, save_dir, n_epochs)
         model.load_state_dict(torch.load(save_dir / (name + ".pt")), strict=False)
+
+        # Compute test-set saliency and associated metrics
         baseline_image = torch.zeros((1, 1, W, W), device=device)
+        gradshap = GradientShap(encoder.mu)
+        attributions = attribute_individual_dim(encoder.mu, dim_latent, test_loader, device, gradshap, baseline_image)
+        metrics = compute_metrics(attributions, metric_list)
+        results_str = '\t'.join([f'{metric_names[k]} {metrics[k]:.2g}' for k in range(len(metric_list))])
+        logging.info(f"Model {name} \t {results_str}")
+
+        # Save the metrics
+        with open(csv_path, 'a', newline='') as csv_file:
+            writer = csv.writer(csv_file, delimiter=',')
+            writer.writerow([str(loss), beta] + metrics)
+
+        # Plot a couple of examples
+        plot_idx = [n for n in range(n_plots)]
+        images_to_plot = [test_dataset[i][0].numpy().reshape(W, W) for i in plot_idx]
+        fig = plot_vae_saliencies(images_to_plot, attributions[plot_idx])
+        fig.savefig(save_dir / f"{name}.pdf")
+
+    fig = vae_box_plots(pd.read_csv(csv_path), metric_names)
+    fig.savefig(save_dir / 'metric_box_plots.pdf')
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    disvae_feature_importance()
+
+
+"""
+ baseline_image = torch.zeros((1, 1, W, W), device=device)
         gradshap = GradientShap(encoder.mu)
         attributions = []
         latents = []
@@ -90,7 +130,4 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plo
 
         plt.savefig(save_dir/f"tcvae_{beta}.pdf")
 
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    disvae_feature_importance()
+"""

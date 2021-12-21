@@ -12,20 +12,25 @@ def plot_image_saliency(image: torch.Tensor, saliency: torch.Tensor):
     visualize_image_attr(saliency_np, image_np)
 
 
-def plot_vae_saliencies(saliency: np.ndarray) -> plt.Figure:
+def plot_vae_saliencies(images: list, saliency: np.ndarray) -> plt.Figure:
     W = saliency.shape[-1]
     n_plots = len(saliency)
     dim_latent = saliency.shape[1]
     cblind_palette = sns.color_palette("colorblind")
-    fig, axs = plt.subplots(ncols=dim_latent, nrows=n_plots, figsize=(4 * dim_latent, 4 * n_plots))
+    fig, axs = plt.subplots(ncols=dim_latent+1, nrows=n_plots, figsize=(3 * (dim_latent+1), 3 * n_plots))
     for example_id in range(n_plots):
         max_saliency = np.max(saliency[example_id])
+        ax = axs[example_id, 0]
+        ax.imshow(images[example_id], cmap='gray')
+        ax.axis('off')
+        ax.set_title('Original Image')
         for dim in range(dim_latent):
             sub_saliency = saliency[example_id, dim]
-            ax = axs[example_id, dim]
+            ax = axs[example_id, dim+1]
             h = sns.heatmap(np.reshape(sub_saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
-                            ax=ax, cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=True,
+                            ax=ax, cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=False,
                             alpha=1, zorder=2, vmin=0, vmax=max_saliency)
+            ax.set_title(f'Saliency Dimension {dim+1}')
     return fig
 
 

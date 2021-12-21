@@ -551,7 +551,7 @@ class VAE(nn.Module):
                          f'Train loss {train_loss:.3g} \t Test loss {test_loss:.3g} \t ')
             if test_loss >= best_test_loss:
                 waiting_epoch += 1
-                logging.info(f'No improvement over the best epoch \t Patience Counter {waiting_epoch} / {patience}')
+                logging.info(f'No improvement over the best epoch \t Patience {waiting_epoch} / {patience}')
             else:
                 logging.info(f'Saving the model in {save_dir}')
                 self.cpu()
