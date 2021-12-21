@@ -4,9 +4,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+import pandas as pd
 import torch
 import torchvision
 import itertools
+import csv
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
@@ -16,9 +18,9 @@ from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, BetaVaeMn
     train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, VAE, EncoderBurgess, \
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
-from utils.math import off_diagonal_sum, cos_saliency, entropy_saliency, \
+from utils.metrics import cos_saliency, entropy_saliency, \
     count_activated_neurons, correlation_saliency, compute_metrics
-from utils.images import plot_vae_saliencies
+from utils.visualize import plot_vae_saliencies, vae_box_plots
 
 
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
@@ -300,8 +302,8 @@ def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
             # plt.show()
 
 
-def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plots: int = 20,
-                              dim_latent: int = 3, n_epochs: int = 1, beta_list: list = [1, 5, 10]) -> None:
+def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plots: int = 20, n_runs: int = 10,
+                              dim_latent: int = 3, n_epochs: int = 100, beta_list: list = [1, 5, 10]) -> None:
     # Initialize seed and device
     np.random.seed(random_seed)
     torch.random.manual_seed(random_seed)
@@ -323,19 +325,28 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
     # Create saving directory
     save_dir = Path.cwd() / "results/mnist/vae"
     if not save_dir.exists():
+        logging.info(f"Creating saving directory {save_dir}")
         os.makedirs(save_dir)
 
+    # Define the computed metrics and create a csv file with appropriate headers
     loss_list = [BetaHLoss(), BtcvaeLoss(is_mss=False, n_data=len(train_dataset))]
     metric_list = [correlation_saliency, cos_saliency, entropy_saliency, count_activated_neurons]
     metric_names = ["Correlation", "Cosine", "Entropy", "Active Neurons"]
-    for beta, loss in itertools.product(beta_list, loss_list):
-        logging.info(f"Now working with beta {beta}")
+    headers = ["Loss Type", "Beta"] + metric_names
+    csv_path = save_dir / "metrics.csv"
+    if not csv_path.is_file():
+        logging.info(f"Creating metrics csv in {csv_path}")
+        with open(csv_path, 'w') as csv_file:
+            dw = csv.DictWriter(csv_file, delimiter=',', fieldnames=headers)
+            dw.writeheader()
+
+    for beta, loss, run in itertools.product(beta_list, loss_list, range(1, n_runs+1)):
 
         # Initialize vaes
         encoder = EncoderBurgess(img_size, dim_latent)
         decoder = DecoderBurgess(img_size, dim_latent)
         loss.beta = beta
-        name = f'{str(loss)}-vae_beta{beta}'
+        name = f'{str(loss)}-vae_beta{beta}_run{run}'
         model = VAE(img_size, encoder, decoder, dim_latent, loss, name=name)
         logging.info(f"Now fitting {name}")
         model.fit(device, train_loader, test_loader, save_dir, n_epochs)
@@ -349,10 +360,18 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
         results_str = '\t'.join([f'{metric_names[k]} {metrics[k]:.2g}' for k in range(len(metric_list))])
         logging.info(f"Model {name} \t {results_str}")
 
-        # Produce a couple of plot examples
+        # Save the metrics
+        with open(csv_path, 'a', newline='') as csv_file:
+            writer = csv.writer(csv_file, delimiter=',')
+            writer.writerow([str(loss), beta] + metrics)
+
+        # Plot a couple of examples
         plot_idx = [torch.nonzero(test_dataset.targets == (n % 10))[n // 10].item() for n in range(n_plots)]
         fig = plot_vae_saliencies(attributions[plot_idx])
         fig.savefig(save_dir / f"{name}.pdf")
+
+    fig = vae_box_plots(pd.read_csv(csv_path), metric_names)
+    fig.savefig(save_dir / 'metric_box_plots.pdf')
 
 
 if __name__ == "__main__":

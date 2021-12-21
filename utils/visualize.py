@@ -3,6 +3,7 @@ import torch
 import seaborn as sns
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 
 
 def plot_image_saliency(image: torch.Tensor, saliency: torch.Tensor):
@@ -25,4 +26,11 @@ def plot_vae_saliencies(saliency: np.ndarray) -> plt.Figure:
             h = sns.heatmap(np.reshape(sub_saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
                             ax=ax, cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=True,
                             alpha=1, zorder=2, vmin=0, vmax=max_saliency)
+    return fig
+
+
+def vae_box_plots(df: pd.DataFrame, metric_names: list) -> plt.Figure:
+    fig, axs = plt.subplots(ncols=1, nrows=len(metric_names), figsize=(6, 4 * len(metric_names)))
+    for id_metric, metric in enumerate(metric_names):
+        sns.boxplot(data=df, x="Beta", y=metric, hue="Loss Type", palette="colorblind", ax=axs[id_metric])
     return fig

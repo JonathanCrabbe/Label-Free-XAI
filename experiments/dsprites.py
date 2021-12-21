@@ -15,7 +15,7 @@ from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, BetaVaeMn
     train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, VAE, EncoderBurgess,\
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
-from utils.math import off_diagonal_sum, cos_saliency, entropy_saliency, count_activated_neurons
+from utils.metrics import off_diagonal_sum, cos_saliency, entropy_saliency, count_activated_neurons
 from utils.datasets import DSprites
 
 

@@ -129,7 +129,7 @@ class BetaHLoss(BaseVAELoss):
         return loss
 
     def __str__(self):
-        return "beta"
+        return "Beta"
 
 
 class BtcvaeLoss(BaseVAELoss):
@@ -203,7 +203,7 @@ class BtcvaeLoss(BaseVAELoss):
         return loss
 
     def __str__(self):
-        return "tc"
+        return "TC"
 
 
 def _reconstruction_loss(data, recon_data, distribution="bernoulli", storer=None):
