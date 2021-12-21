@@ -16,7 +16,8 @@ from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, BetaVaeMn
     train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, VAE, EncoderBurgess,\
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
-from utils.math import off_diagonal_sum, cos_saliency, entropy_saliency, count_activated_neurons
+from utils.math import off_diagonal_sum, cos_saliency, entropy_saliency, \
+count_activated_neurons, correlation_saliency, compute_metrics
 
 
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
@@ -307,21 +308,14 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-
     # Load MNIST
     W = 32
     img_size = (1, W, W)
     data_dir = Path.cwd() / "data/mnist"
     train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
     test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
-    train_transform = transforms.Compose([
-                             transforms.Resize(W),
-                             transforms.ToTensor()
-                         ])
-    test_transform = transforms.Compose([
-                             transforms.Resize(W),
-                             transforms.ToTensor()
-                         ])
+    train_transform = transforms.Compose([transforms.Resize(W), transforms.ToTensor()])
+    test_transform = transforms.Compose([transforms.Resize(W), transforms.ToTensor()])
     train_dataset.transform = train_transform
     test_dataset.transform = test_transform
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
@@ -333,6 +327,8 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
         os.makedirs(save_dir)
 
     loss_list = [BetaHLoss(), BtcvaeLoss(is_mss=False, n_data=len(train_dataset))]
+    metric_list = [correlation_saliency, cos_saliency, entropy_saliency, count_activated_neurons]
+    metric_names = ["Correlation", "Cosine", "Entropy", "Active Neurons"]
     for beta, loss in itertools.product(beta_list, loss_list):
         logging.info(f"Now working with beta {beta}")
 
@@ -346,15 +342,15 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
         model.fit(device, train_loader, test_loader, save_dir, n_epochs)
         model.load_state_dict(torch.load(save_dir / (name + ".pt")), strict=False)
 
+        # Compute test-set saliency and associated metrics
         baseline_image = torch.zeros((1, 1, W, W), device=device)
         gradshap = GradientShap(encoder.mu)
         attributions = attribute_individual_dim(encoder.mu, dim_latent, test_loader, device, gradshap, baseline_image)
-        corr = np.corrcoef(attributions.swapaxes(0, 1).reshape(dim_latent, -1))
-        metric = off_diagonal_sum(corr)/(dim_latent*(dim_latent-1))
-        activated_avg = count_activated_neurons(attributions)
+        metrics = compute_metrics(attributions, metric_list)
+        results_str = '\t'.join([f'{metric_names[k]} {metrics[k]:.2g}' for k in range(len(metric_list))])
+        logging.info(f"Model {name} \t {results_str}")
 
-        logging.info(f"Model {name} \t Pearson Correlation {metric:.2g} \t"
-                     f" Active Neurons {activated_avg:.2g} ")
+        # Produce a couple of plot examples
         cblind_palette = sns.color_palette("colorblind")
         fig, axs = plt.subplots(ncols=dim_latent, nrows=n_plots, figsize=(4*dim_latent, 4*n_plots))
         for example_id in range(n_plots):
