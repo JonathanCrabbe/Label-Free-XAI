@@ -20,7 +20,7 @@ from utils.datasets import DSprites
 from utils.visualize import vae_box_plots, plot_vae_saliencies
 
 
-def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plots: int = 20, n_runs: int = 5,
+def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plots: int = 10, n_runs: int = 5,
                               dim_latent: int = 6, n_epochs: int = 100, beta_list: list = [1, 5, 10],
                               test_split=0.1) -> None:
     # Initialize seed and device
