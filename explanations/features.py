@@ -56,6 +56,7 @@ def attribute_individual_dim(encoder: callable,  dim_latent: int, data_loader: t
     attributions = np.abs(np.expand_dims(latents, (2, 3)) * attributions)
     return attributions
 
+
 def attribute_auxiliary(encoder: Module, data_loader: torch.utils.data.DataLoader,
                         device: torch.device, attr_method: Attribution, baseline=None) -> np.ndarray:
     attributions = []

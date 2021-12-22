@@ -12,7 +12,6 @@ LOSSES = ["betaH", "btcvae"]
 RECON_DIST = ["bernoulli", "laplace", "gaussian"]
 
 
-# TO-DO: clean n_data and device
 def get_loss_f(loss_name, **kwargs_parse):
     """Return the correct loss function given the argparse arguments."""
     kwargs_all = dict(rec_dist=kwargs_parse["rec_dist"],

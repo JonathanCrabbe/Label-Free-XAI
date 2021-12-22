@@ -14,10 +14,11 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from scipy.stats import pearsonr, spearmanr
 from explanations.features import AuxiliaryFunction, attribute_auxiliary, attribute_individual_dim
-from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, BetaVaeMnist, BetaTcVaeMnist, \
+from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, AutoEncoderMnist, \
     train_denoiser_epoch, test_denoiser_epoch, train_classifier_epoch, test_classifier_epoch, VAE, EncoderBurgess, \
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
+from models.pretext import Identity, RandomNoise, Mask
 from utils.metrics import cos_saliency, entropy_saliency, \
     count_activated_neurons, correlation_saliency, compute_metrics
 from utils.visualize import plot_vae_saliencies, vae_box_plots
@@ -42,8 +43,8 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     # Initialize encoder and decoder
-    encoder = EncoderMnist(encoded_space_dim=dim_latent, fc2_input_dim=128)
-    decoder = DecoderMnist(encoded_space_dim=dim_latent, fc2_input_dim=128)
+    encoder = EncoderMnist(encoded_space_dim=dim_latent)
+    decoder = DecoderMnist(encoded_space_dim=dim_latent)
     encoder.to(device)
     decoder.to(device)
 
@@ -147,8 +148,8 @@ def track_importance(random_seed: int = 1, batch_size: int = 200,
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     # Initialize encoder and decoder
-    encoder = EncoderMnist(encoded_space_dim=dim_latent, fc2_input_dim=128)
-    decoder = DecoderMnist(encoded_space_dim=dim_latent, fc2_input_dim=128)
+    encoder = EncoderMnist(encoded_space_dim=dim_latent)
+    decoder = DecoderMnist(encoded_space_dim=dim_latent)
     encoder.to(device)
     decoder.to(device)
 
@@ -239,69 +240,6 @@ def track_importance(random_seed: int = 1, batch_size: int = 200,
     '''
 
 
-def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
-                           dim_latent: int = 2, n_epochs: int = 1, beta_list: list = [1, 2, 5, 10]) -> None:
-    # Initialize seed and device
-    torch.random.manual_seed(random_seed)
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model_names = [r"$\beta$-VAE", r"$\beta$-TCVAE"]
-
-    # Load MNIST
-    data_dir = Path.cwd() / "data/mnist"
-    train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
-    test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
-    train_transform = transforms.Compose([transforms.ToTensor()])
-    test_transform = transforms.Compose([transforms.ToTensor()])
-    train_dataset.transform = train_transform
-    test_dataset.transform = test_transform
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    for beta in beta_list:
-        logging.info(f"Now working with beta = {beta}...")
-
-        # Initialize vaes
-        vae = BetaVaeMnist(dim_latent, beta).cpu()
-        tcvae = BetaTcVaeMnist(dim_latent, beta).cpu()
-        for id_model, model in enumerate([vae, tcvae]):
-            logging.info(f"Now fitting model {model_names[id_model]}...")
-            model.fit(device, train_loader, test_loader, n_epochs)
-
-            test_images = next(iter(test_loader))[0].to(device)
-            test_image = test_images[1:2]
-            latent_rep = model.encoder.mu(test_image).detach().cpu().numpy().reshape(dim_latent)
-            baseline_image = torch.zeros(test_image.shape, device=device)
-            gradshap = GradientShap(model.encoder.mu)
-            attributions = []
-            W = 28
-            cblind_palette = sns.color_palette("colorblind")
-            fig = plt.figure(figsize=(10, 10))
-
-            for image_batch, _ in test_loader:
-                image_batch = image_batch.to(device)
-                attributions_batch = []
-                for dim in range(dim_latent):
-                    attribution = gradshap.attribute(image_batch, baseline_image, target=dim).detach().cpu().numpy()
-                    attributions_batch.append(np.reshape(attribution, (len(image_batch), 1, W, W)))
-                attributions.append(np.concatenate(attributions_batch, axis=1))
-            attributions = np.abs(np.concatenate(attributions))
-            corr = spearmanr(attributions[:, 0, :, :].flatten(),
-                             attributions[:, 1, :, :].flatten())[0]
-
-            logging.info(f"Model {model_names[id_model]} \t Beta {beta} \t Saliency Correlation {corr:.2g} ")
-
-            for dim in range(dim_latent):
-                attribution = gradshap.attribute(test_image, baseline_image, target=dim).detach().cpu().numpy()
-                saliency = np.abs(latent_rep[dim] * attribution)
-                ax = fig.add_subplot(3, 3, dim + 1)
-                h = sns.heatmap(np.reshape(saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False, ax=ax,
-                                cmap=sns.dark_palette(cblind_palette[dim], as_cmap=True), cbar=True, alpha=0.7,
-                                zorder=2)
-                h.imshow(np.reshape(test_image.cpu().numpy(), (W, W)), zorder=1,
-                         cmap=sns.color_palette("dark:white", as_cmap=True))
-            # plt.show()
-
-
 def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plots: int = 20, n_runs: int = 5,
                               dim_latent: int = 3, n_epochs: int = 100, beta_list: list = [1, 5, 10]) -> None:
     # Initialize seed and device
@@ -376,6 +314,58 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
     fig.savefig(save_dir / 'metric_box_plots.pdf')
 
 
+def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs: int = 5,
+                             dim_latent: int = 4, n_epochs: int = 100, patience: int = 10) -> None:
+    # Initialize seed and device
+    np.random.seed(random_seed)
+    torch.random.manual_seed(random_seed)
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+    # Load MNIST
+    data_dir = Path.cwd() / "data/mnist"
+    train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
+    test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
+    train_transform = transforms.Compose([transforms.ToTensor()])
+    test_transform = transforms.Compose([transforms.ToTensor()])
+    train_dataset.transform = train_transform
+    test_dataset.transform = test_transform
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    # Create saving directory
+    save_dir = Path.cwd() / "results/mnist/pretext"
+    if not save_dir.exists():
+        logging.info(f"Creating saving directory {save_dir}")
+        os.makedirs(save_dir)
+
+    # Define the computed metrics and create a csv file with appropriate headers
+    pretext_list = [Identity(), RandomNoise(noise_level=0.3), Mask(mask_proportion=0.2)]
+    correlation = np.zeros((n_runs, len(pretext_list), len(pretext_list)))
+
+    for run in range(n_runs):
+        attributions = []
+        for pretext in pretext_list:
+            # Create and fit an autoencoder for the pretext task
+            name = f'{str(pretext)}-ae_run{run}'
+            encoder = EncoderMnist(dim_latent)
+            decoder = DecoderMnist(dim_latent)
+            model = AutoEncoderMnist(encoder, decoder, dim_latent, pretext, name)
+            logging.info(f"Now fitting {name}")
+            model.fit(device, train_loader, test_loader, save_dir, n_epochs, patience)
+            model.load_state_dict(torch.load(save_dir / (name + ".pt")), strict=False)
+
+            # Compute test-set saliency
+            baseline_image = torch.zeros((1, 1, 28, 28), device=device)
+            gradshap = GradientShap(encoder)
+            attributions.append(np.abs(np.expand_dims(attribute_auxiliary(encoder, test_loader,
+                                                                          device, gradshap, baseline_image), 0)))
+        # Compute correlation between the saliency of different
+        attributions = np.concatenate(attributions)
+        correlation[run] = np.corrcoef(attributions.reshape((len(pretext_list), -1)))
+        logging.info(f'Run {run} complete \t Correlation {correlation[run]}')
+    logging.info(f'Average Correlation {np.mean(correlation, axis=0)} \t Std Correlation {np.std(correlation, axis=0)}')
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     disvae_feature_importance()
@@ -408,4 +398,68 @@ if __name__ == "__main__":
                 h = sns.heatmap(np.reshape(sub_saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
                                 ax=ax, cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=True,
                                 alpha=1, zorder=2, vmin=0, vmax=max_saliency)
+                                
+                                
+                                def vae_feature_importance(random_seed: int = 1, batch_size: int = 200,
+                           dim_latent: int = 2, n_epochs: int = 1, beta_list: list = [1, 2, 5, 10]) -> None:
+    # Initialize seed and device
+    torch.random.manual_seed(random_seed)
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    model_names = [r"$\beta$-VAE", r"$\beta$-TCVAE"]
+
+    # Load MNIST
+    data_dir = Path.cwd() / "data/mnist"
+    train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
+    test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
+    train_transform = transforms.Compose([transforms.ToTensor()])
+    test_transform = transforms.Compose([transforms.ToTensor()])
+    train_dataset.transform = train_transform
+    test_dataset.transform = test_transform
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    for beta in beta_list:
+        logging.info(f"Now working with beta = {beta}...")
+
+        # Initialize vaes
+        vae = BetaVaeMnist(dim_latent, beta).cpu()
+        tcvae = BetaTcVaeMnist(dim_latent, beta).cpu()
+        for id_model, model in enumerate([vae, tcvae]):
+            logging.info(f"Now fitting model {model_names[id_model]}...")
+            model.fit(device, train_loader, test_loader, n_epochs)
+
+            test_images = next(iter(test_loader))[0].to(device)
+            test_image = test_images[1:2]
+            latent_rep = model.encoder.mu(test_image).detach().cpu().numpy().reshape(dim_latent)
+            baseline_image = torch.zeros(test_image.shape, device=device)
+            gradshap = GradientShap(model.encoder.mu)
+            attributions = []
+            W = 28
+            cblind_palette = sns.color_palette("colorblind")
+            fig = plt.figure(figsize=(10, 10))
+
+            for image_batch, _ in test_loader:
+                image_batch = image_batch.to(device)
+                attributions_batch = []
+                for dim in range(dim_latent):
+                    attribution = gradshap.attribute(image_batch, baseline_image, target=dim).detach().cpu().numpy()
+                    attributions_batch.append(np.reshape(attribution, (len(image_batch), 1, W, W)))
+                attributions.append(np.concatenate(attributions_batch, axis=1))
+            attributions = np.abs(np.concatenate(attributions))
+            corr = spearmanr(attributions[:, 0, :, :].flatten(),
+                             attributions[:, 1, :, :].flatten())[0]
+
+            logging.info(f"Model {model_names[id_model]} \t Beta {beta} \t Saliency Correlation {corr:.2g} ")
+
+            for dim in range(dim_latent):
+                attribution = gradshap.attribute(test_image, baseline_image, target=dim).detach().cpu().numpy()
+                saliency = np.abs(latent_rep[dim] * attribution)
+                ax = fig.add_subplot(3, 3, dim + 1)
+                h = sns.heatmap(np.reshape(saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False, ax=ax,
+                                cmap=sns.dark_palette(cblind_palette[dim], as_cmap=True), cbar=True, alpha=0.7,
+                                zorder=2)
+                h.imshow(np.reshape(test_image.cpu().numpy(), (W, W)), zorder=1,
+                         cmap=sns.color_palette("dark:white", as_cmap=True))
+            # plt.show()
+
 """
