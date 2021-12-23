@@ -378,11 +378,14 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", type=str, default="disvae")
+    parser.add_argument("-n", type=int, default=5)
+    parser.add_argument("-b", type=int, default=300)
+    parser.add_argument("-r", type=int, default=1)
     args = parser.parse_args()
     if args.e == "disvae":
-        disvae_feature_importance()
+        disvae_feature_importance(n_runs=args.n, batch_size=args.b, random_seed=args.r)
     elif args.e == "pretext":
-        pretext_task_sensitivity()
+        pretext_task_sensitivity(n_runs=args.n, batch_size=args.b, random_seed=args.r)
     else:
         raise ValueError("Invalid experiment name")
 
