@@ -1,9 +1,9 @@
 import os
 import logging
 from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 import pandas as pd
 import torch
 import itertools
@@ -15,7 +15,7 @@ from models.images import VAE, EncoderBurgess,\
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
 from utils.metrics import off_diagonal_sum, cos_saliency, entropy_saliency,\
-    count_activated_neurons, correlation_saliency, compute_metrics
+    count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency
 from utils.datasets import DSprites
 from utils.visualize import vae_box_plots, plot_vae_saliencies
 
@@ -46,8 +46,8 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plo
 
     # Define the computed metrics and create a csv file with appropriate headers
     loss_list = [BetaHLoss(), BtcvaeLoss(is_mss=False, n_data=len(train_dataset))]
-    metric_list = [correlation_saliency, cos_saliency, entropy_saliency, count_activated_neurons]
-    metric_names = ["Correlation", "Cosine", "Entropy", "Active Neurons"]
+    metric_list = [pearson_saliency, spearman_saliency, cos_saliency, entropy_saliency, count_activated_neurons]
+    metric_names = ["Pearson Correlation", "Spearman Correlation", "Cosine", "Entropy", "Active Neurons"]
     headers = ["Loss Type", "Beta"] + metric_names
     csv_path = save_dir / "metrics.csv"
     if not csv_path.is_file():
@@ -85,9 +85,11 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plo
         images_to_plot = [test_dataset[i][0].numpy().reshape(W, W) for i in plot_idx]
         fig = plot_vae_saliencies(images_to_plot, attributions[plot_idx])
         fig.savefig(save_dir / f"{name}.pdf")
+        plt.close(fig)
 
     fig = vae_box_plots(pd.read_csv(csv_path), metric_names)
     fig.savefig(save_dir / 'metric_box_plots.pdf')
+    plt.close(fig)
 
 
 if __name__ == "__main__":

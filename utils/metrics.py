@@ -1,14 +1,20 @@
 import numpy as np
-from scipy.stats import entropy
+from scipy.stats import entropy, spearmanr
 
 
 def off_diagonal_sum(mat: np.ndarray) -> np.ndarray:
     return np.sum(mat) - np.trace(mat)
 
 
-def correlation_saliency(saliency: np.ndarray) -> np.ndarray:
+def pearson_saliency(saliency: np.ndarray) -> np.ndarray:
     latent_dim = saliency.shape[1]
     corr = np.corrcoef(saliency.swapaxes(0, 1).reshape(latent_dim, -1))
+    return off_diagonal_sum(corr) / (latent_dim * (latent_dim - 1))
+
+
+def spearman_saliency(saliency: np.ndarray) -> np.ndarray:
+    latent_dim = saliency.shape[1]
+    corr = spearmanr(saliency.swapaxes(0, 1).reshape(latent_dim, -1))[0]
     return off_diagonal_sum(corr) / (latent_dim * (latent_dim - 1))
 
 

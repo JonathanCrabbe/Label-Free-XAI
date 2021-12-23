@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 import torchvision
 import itertools
+import argparse
 import csv
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
 from torch.utils.data import DataLoader, random_split
@@ -20,7 +21,7 @@ from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, AutoEncod
 from models.losses import BetaHLoss, BtcvaeLoss
 from models.pretext import Identity, RandomNoise, Mask
 from utils.metrics import cos_saliency, entropy_saliency, \
-    count_activated_neurons, correlation_saliency, compute_metrics
+    count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency
 from utils.visualize import plot_vae_saliencies, vae_box_plots
 
 
@@ -268,8 +269,8 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
 
     # Define the computed metrics and create a csv file with appropriate headers
     loss_list = [BetaHLoss(), BtcvaeLoss(is_mss=False, n_data=len(train_dataset))]
-    metric_list = [correlation_saliency, cos_saliency, entropy_saliency, count_activated_neurons]
-    metric_names = ["Correlation", "Cosine", "Entropy", "Active Neurons"]
+    metric_list = [pearson_saliency, spearman_saliency, cos_saliency, entropy_saliency, count_activated_neurons]
+    metric_names = ["Pearson Correlation", "Spearman Correlation", "Cosine", "Entropy", "Active Neurons"]
     headers = ["Loss Type", "Beta"] + metric_names
     csv_path = save_dir / "metrics.csv"
     if not csv_path.is_file():
@@ -279,7 +280,6 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
             dw.writeheader()
 
     for beta, loss, run in itertools.product(beta_list, loss_list, range(1, n_runs+1)):
-
         # Initialize vaes
         encoder = EncoderBurgess(img_size, dim_latent)
         decoder = DecoderBurgess(img_size, dim_latent)
@@ -309,9 +309,11 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
         fig = plot_vae_saliencies(images_to_plot,
                                   attributions[plot_idx])
         fig.savefig(save_dir / f"{name}.pdf")
+        plt.close(fig)
 
     fig = vae_box_plots(pd.read_csv(csv_path), metric_names)
     fig.savefig(save_dir / 'metric_box_plots.pdf')
+    plt.close(fig)
 
 
 def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs: int = 5,
@@ -340,7 +342,8 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
 
     # Define the computed metrics and create a csv file with appropriate headers
     pretext_list = [Identity(), RandomNoise(noise_level=0.3), Mask(mask_proportion=0.2)]
-    correlation = np.zeros((n_runs, len(pretext_list), len(pretext_list)))
+    pearson = np.zeros((n_runs, len(pretext_list), len(pretext_list)))
+    spearman = np.zeros((n_runs, len(pretext_list), len(pretext_list)))
 
     for run in range(n_runs):
         attributions = []
@@ -361,14 +364,27 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
                                                                           device, gradshap, baseline_image), 0)))
         # Compute correlation between the saliency of different
         attributions = np.concatenate(attributions)
-        correlation[run] = np.corrcoef(attributions.reshape((len(pretext_list), -1)))
-        logging.info(f'Run {run} complete \t Correlation {correlation[run]}')
-    logging.info(f'Average Correlation {np.mean(correlation, axis=0)} \t Std Correlation {np.std(correlation, axis=0)}')
+        pearson[run] = np.corrcoef(attributions.reshape((len(pretext_list), -1)))
+        spearman[run] = spearmanr(attributions.reshape((len(pretext_list), -1)), axis=1)[0]
+        logging.info(f'Run {run} complete \n Pearson \n {np.round(pearson[run], decimals=2)} '
+                     f'\n Spearman \n {np.round(spearman[run], decimals=2)}')
+    logging.info(f'Average Pearson \n {np.round(np.mean(pearson, axis=0), decimals=2)} \n'
+                 f' Std Pearson \n {np.round(np.std(pearson, axis=0), decimals=2)} ')
+    logging.info(f'Average Spearman \n {np.round(np.mean(spearman, axis=0), decimals=2)} \n '
+                 f'Std Spearman \n {np.round(np.std(spearman, axis=0), decimals=2)} \n')
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    disvae_feature_importance()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-e", type=str, default="disvae")
+    args = parser.parse_args()
+    if args.e == "disvae":
+        disvae_feature_importance()
+    elif args.e == "pretext":
+        pretext_task_sensitivity()
+    else:
+        raise ValueError("Invalid experiment name")
 
 """
         attributions = []

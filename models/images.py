@@ -84,7 +84,7 @@ class DecoderMnist(nn.Module):
 class AutoEncoderMnist(nn.Module):
 
     def __init__(self,  encoder: EncoderMnist, decoder: DecoderMnist,
-                 latent_dim: int, input_pert: callable, name: str = "model"):
+                 latent_dim: int, input_pert: callable, name: str = "model", loss_f: callable = nn.MSELoss()):
         """
         Class which defines model and forward pass.
         Parameters
@@ -94,11 +94,11 @@ class AutoEncoderMnist(nn.Module):
         """
         super(AutoEncoderMnist, self).__init__()
         self.latent_dim = latent_dim
-        self.num_pixels = self.img_size[1] * self.img_size[2]
         self.encoder = encoder
         self.decoder = decoder
         self.input_pert = input_pert
         self.name = name
+        self.loss_f = loss_f
 
     def forward(self, x):
         """
@@ -115,13 +115,12 @@ class AutoEncoderMnist(nn.Module):
     def train_epoch(self, device: torch.device, dataloader: torch.utils.data.DataLoader,
                     optimizer: torch.optim.Optimizer) -> np.ndarray:
         self.train()
-        loss_f = nn.MSELoss()
         train_loss = []
         for image_batch, _ in tqdm(dataloader, unit="batches", leave=False):
             image_batch = image_batch.to(device)
-            image_batch = self.input_pert(image_batch)
-            recon_batch = self.forward(image_batch)
-            loss = loss_f(image_batch, recon_batch)
+            pert_batch = self.input_pert(image_batch)
+            recon_batch = self.forward(pert_batch)
+            loss = self.loss_f(image_batch, recon_batch)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -134,7 +133,8 @@ class AutoEncoderMnist(nn.Module):
         with torch.no_grad():
             for image_batch, _ in dataloader:
                 image_batch = image_batch.to(device)
-                recon_batch = self.forward(image_batch)
+                pert_batch = self.input_pert(image_batch)
+                recon_batch = self.forward(pert_batch)
                 loss = self.loss_f(image_batch, recon_batch)
                 test_loss.append(loss.cpu().numpy())
         return np.mean(test_loss)

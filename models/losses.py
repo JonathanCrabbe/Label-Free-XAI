@@ -1,9 +1,6 @@
 import abc
-import math
 import torch
-import torch.nn as nn
 from torch.nn import functional as F
-from torch import optim
 
 from utils.math import (log_density_gaussian, log_importance_weight_matrix,
                         matrix_log_density_gaussian)
