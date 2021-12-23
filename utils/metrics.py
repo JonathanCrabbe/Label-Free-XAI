@@ -14,7 +14,7 @@ def pearson_saliency(saliency: np.ndarray) -> np.ndarray:
 
 def spearman_saliency(saliency: np.ndarray) -> np.ndarray:
     latent_dim = saliency.shape[1]
-    corr = spearmanr(saliency.swapaxes(0, 1).reshape(latent_dim, -1))[0]
+    corr = spearmanr(saliency.swapaxes(0, 1).reshape(latent_dim, -1), axis=1)[0]
     return off_diagonal_sum(corr) / (latent_dim * (latent_dim - 1))
 
 
