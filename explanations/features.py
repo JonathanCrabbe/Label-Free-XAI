@@ -4,7 +4,6 @@ from captum.attr import Attribution
 from torch.nn import Module
 
 
-
 class AuxiliaryFunction(Module):
     def __init__(self, black_box: Module, base_features: torch.Tensor) -> None:
         super().__init__()

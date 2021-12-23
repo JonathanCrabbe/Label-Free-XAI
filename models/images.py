@@ -208,16 +208,19 @@ class AutoEncoderMnist(nn.Module):
 
 
 class ClassifierMnist(nn.Module):
-    def __init__(self, encoder: EncoderMnist):
+    def __init__(self, encoder: EncoderMnist, latent_dim: int, name: str):
         super().__init__()
         self.encoder_cnn = encoder.encoder_cnn
         self.flatten = nn.Flatten(start_dim=1)
         self.encoder_lin = encoder.encoder_lin
         self.lin_output = nn.Sequential(
-            nn.Linear(encoder.encoded_space_dim, 10),
+            nn.Linear(latent_dim, 10),
             nn.Softmax()
         )
         self.encoded_space_dim = encoder.encoded_space_dim
+        self.loss_f = nn.CrossEntropyLoss()
+        self.latent_dim = latent_dim
+        self.name = name
 
     def forward(self, x):
         x = self.encoder_cnn(x)
@@ -225,6 +228,102 @@ class ClassifierMnist(nn.Module):
         x = self.encoder_lin(x)
         x = self.lin_output(x)
         return x
+
+    def train_epoch(self, device: torch.device, dataloader: torch.utils.data.DataLoader,
+                    optimizer: torch.optim.Optimizer) -> np.ndarray:
+        self.train()
+        train_loss = []
+        for image_batch, label_batch in tqdm(dataloader, unit="batches", leave=False):
+            image_batch = image_batch.to(device)
+            label_batch = label_batch.to(device)
+            loss = self.loss_f(self.forward(image_batch), label_batch)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            train_loss.append(loss.detach().cpu().numpy())
+        return np.mean(train_loss)
+
+    def test_epoch(self, device: torch.device, dataloader: torch.utils.data.DataLoader):
+        self.eval()
+        test_loss = []
+        test_acc = []
+        with torch.no_grad():
+            for image_batch, label_batch in dataloader:
+                image_batch = image_batch.to(device)
+                label_batch = label_batch.to(device)
+                proba_batch = self.forward(image_batch)
+                loss = self.loss_f(proba_batch, label_batch)
+                pred_batch = torch.argmax(proba_batch, dim=-1)
+                test_loss.append(loss.cpu().numpy())
+                test_acc.append(torch.count_nonzero(pred_batch == label_batch).cpu().numpy()/len(image_batch))
+        return np.mean(test_loss), np.mean(test_acc)
+
+    def fit(self, device: torch.device, train_loader: torch.utils.data.DataLoader,
+            test_loader: torch.utils.data.DataLoader, save_dir: pathlib.Path,
+            n_epoch: int = 30, patience: int = 10) -> None:
+        self.to(device)
+        optim = torch.optim.Adam(self.parameters(), lr=1e-03, weight_decay=1e-05)
+        waiting_epoch = 0
+        best_test_loss = float("inf")
+        for epoch in range(n_epoch):
+            train_loss = self.train_epoch(device, train_loader, optim)
+            test_loss, test_acc = self.test_epoch(device, test_loader)
+            logging.info(f'Epoch {epoch + 1}/{n_epoch} \t '
+                         f'Train loss {train_loss:.3g} \t Test loss {test_loss:.3g} \t Test accuracy {test_acc:.3g}')
+            if test_loss >= best_test_loss:
+                waiting_epoch += 1
+                logging.info(f'No improvement over the best epoch \t Patience {waiting_epoch} / {patience}')
+            else:
+                logging.info(f'Saving the model in {save_dir}')
+                self.cpu()
+                self.save(save_dir)
+                self.to(device)
+                best_test_loss = test_loss.data
+                waiting_epoch = 0
+            if waiting_epoch == patience:
+                logging.info(f'Early stopping activated')
+                break
+
+    def save(self, directory: pathlib.Path) -> None:
+        """
+        Save a model and corresponding metadata.
+        Parameters
+        ----------
+        directory : pathlib.Path
+            Path to the directory where to save the data.
+        """
+        model_name = self.name
+        self.save_metadata(directory)
+        path_to_model = directory / (model_name + ".pt")
+        torch.save(self.state_dict(), path_to_model)
+
+    def load_metadata(self, directory: pathlib.Path) -> dict:
+        """Load the metadata of a training directory.
+        Parameters
+        ----------
+        directory : pathlib.Path
+            Path to folder where model is saved. For example './experiments/mnist'.
+        """
+        path_to_metadata = directory / (self.name + ".json")
+
+        with open(path_to_metadata) as metadata_file:
+            metadata = json.load(metadata_file)
+        return metadata
+
+    def save_metadata(self, directory: pathlib.Path, **kwargs) -> None:
+        """Load the metadata of a training directory.
+        Parameters
+        ----------
+        directory: string
+            Path to folder where to save model. For example './experiments/mnist'.
+        kwargs:
+            Additional arguments to `json.dump`
+        """
+        path_to_metadata = directory / (self.name + ".json")
+        metadata = {"latent_dim": self.latent_dim,
+                    "name": self.name}
+        with open(path_to_metadata, 'w') as f:
+            json.dump(metadata, f, indent=4, sort_keys=True, **kwargs)
 
 
 class VarEncoderMnist(nn.Module):
