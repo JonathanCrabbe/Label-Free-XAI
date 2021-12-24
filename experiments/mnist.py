@@ -342,8 +342,9 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
 
     # Define the computed metrics and create a csv file with appropriate headers
     pretext_list = [Identity(), RandomNoise(noise_level=0.3), Mask(mask_proportion=0.2)]
-    pearson = np.zeros((n_runs, len(pretext_list), len(pretext_list)))
-    spearman = np.zeros((n_runs, len(pretext_list), len(pretext_list)))
+    n_tasks = len(pretext_list) + 1
+    pearson = np.zeros((n_runs, n_tasks, n_tasks))
+    spearman = np.zeros((n_runs, n_tasks, n_tasks))
 
     for run in range(n_runs):
         attributions = []
@@ -356,16 +357,27 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
             logging.info(f"Now fitting {name}")
             model.fit(device, train_loader, test_loader, save_dir, n_epochs, patience)
             model.load_state_dict(torch.load(save_dir / (name + ".pt")), strict=False)
-
             # Compute test-set saliency
             baseline_image = torch.zeros((1, 1, 28, 28), device=device)
             gradshap = GradientShap(encoder)
-            attributions.append(np.abs(np.expand_dims(attribute_auxiliary(encoder, test_loader,
-                                                                          device, gradshap, baseline_image), 0)))
+            attributions.append(np.abs(np.expand_dims(attribute_auxiliary(encoder, test_loader, device,
+                                                                          gradshap, baseline_image), 0)))
+        # Create and fit a MNIST classfier
+        name = f'Classifier_run{run}'
+        encoder = EncoderMnist(dim_latent)
+        classifier = ClassifierMnist(encoder, dim_latent, name)
+        logging.info(f"Now fitting {name}")
+        classifier.fit(device, train_loader, test_loader, save_dir, n_epochs, patience)
+        classifier.load_state_dict(torch.load(save_dir / (name + ".pt")), strict=False)
+        baseline_image = torch.zeros((1, 1, 28, 28), device=device)
+        gradshap = GradientShap(encoder)
+        attributions.append(np.abs(np.expand_dims(attribute_auxiliary(encoder, test_loader, device,
+                                                                      gradshap, baseline_image), 0)))
+
         # Compute correlation between the saliency of different
         attributions = np.concatenate(attributions)
-        pearson[run] = np.corrcoef(attributions.reshape((len(pretext_list), -1)))
-        spearman[run] = spearmanr(attributions.reshape((len(pretext_list), -1)), axis=1)[0]
+        pearson[run] = np.corrcoef(attributions.reshape((n_tasks, -1)))
+        spearman[run] = spearmanr(attributions.reshape((n_tasks, -1)), axis=1)[0]
         logging.info(f'Run {run} complete \n Pearson \n {np.round(pearson[run], decimals=2)} '
                      f'\n Spearman \n {np.round(spearman[run], decimals=2)}')
     logging.info(f'Average Pearson \n {np.round(np.mean(pearson, axis=0), decimals=2)} \n'

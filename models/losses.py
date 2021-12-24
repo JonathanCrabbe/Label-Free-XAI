@@ -27,6 +27,30 @@ def get_loss_f(loss_name, **kwargs_parse):
         raise ValueError("Uknown loss : {}".format(loss_name))
 
 
+class SupConLoss(torch.nn.Module):
+    """Supervised Contrastive Learning: https://arxiv.org/pdf/2004.11362.pdf."""
+    def __init__(self, temperature=0.07):
+        super(SupConLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, latents: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Compute contrastive loss.
+        Args:
+            latents: hidden vector of shape [batch_size, dim_latent].
+            labels: ground truth of shape [batch_size].
+        Returns:
+            A loss scalar.
+        """
+        batch_size, dim_latent = latents.shape
+        labels = labels.contiguous().view(-1, 1)
+        if labels.shape[0] != batch_size:
+            raise ValueError('Num of labels does not match num of features')
+        count_class1 = torch.count_nonzero(labels)
+        count_class0 = batch_size - count_class1
+        P = count_class1*labels + count_class0*(1-labels)
+        loss = 0
+        return loss
+
 class BaseVAELoss(abc.ABC):
     """
     Base class for losses.
@@ -342,3 +366,4 @@ def _get_log_pz_qz_prodzi_qzCx(latent_sample, latent_dist, n_data, is_mss=True):
     log_prod_qzi = torch.logsumexp(mat_log_qz, dim=1, keepdim=False).sum(1)
 
     return log_pz, log_qz, log_prod_qzi, log_q_zCx
+

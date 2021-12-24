@@ -215,7 +215,7 @@ class ClassifierMnist(nn.Module):
         self.encoder_lin = encoder.encoder_lin
         self.lin_output = nn.Sequential(
             nn.Linear(latent_dim, 10),
-            nn.Softmax()
+            nn.Softmax(dim=-1)
         )
         self.encoded_space_dim = encoder.encoded_space_dim
         self.loss_f = nn.CrossEntropyLoss()
