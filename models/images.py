@@ -108,6 +108,8 @@ class AutoEncoderMnist(nn.Module):
         x : torch.Tensor
             Batch of data. Shape (batch_size, n_chan, height, width)
         """
+        if self.training:
+            x = self.input_pert(x)
         x = self.encoder(x)
         x = self.decoder(x)
         return x
@@ -118,8 +120,7 @@ class AutoEncoderMnist(nn.Module):
         train_loss = []
         for image_batch, _ in tqdm(dataloader, unit="batches", leave=False):
             image_batch = image_batch.to(device)
-            pert_batch = self.input_pert(image_batch)
-            recon_batch = self.forward(pert_batch)
+            recon_batch = self.forward(image_batch)
             loss = self.loss_f(image_batch, recon_batch)
             optimizer.zero_grad()
             loss.backward()

@@ -36,7 +36,7 @@ class Identity(InputPerturbation, ABC):
 
 
 class RandomNoise(InputPerturbation, ABC):
-    def __init__(self, noise_level: float):
+    def __init__(self, noise_level: float = 0.3):
         super().__init__()
         self.noise_level = noise_level
 
