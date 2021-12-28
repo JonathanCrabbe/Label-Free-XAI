@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from scipy.stats import pearsonr, spearmanr
 from explanations.features import AuxiliaryFunction, attribute_auxiliary, attribute_individual_dim
-from explanations.examples import InfluenceFunctions
+from explanations.examples import InfluenceFunction, InfluenceFunctionsOld
 from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, AutoEncoderMnist, VAE, EncoderBurgess, \
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
@@ -116,7 +116,7 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
 
 
 def consistency_examples(random_seed: int = 1, batch_size: int = 200,
-                         dim_latent: int = 4, n_epochs: int = 1) -> None:
+                         dim_latent: int = 4, n_epochs: int = 1, corpus_size: int = 5) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -125,9 +125,7 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200,
     W = 28  # Image width = height
     data_dir = Path.cwd() / "data/mnist"
     train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
-    X_train = train_dataset.data.unsqueeze(1).float()
     test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
-    X_test = test_dataset.data.unsqueeze(1).float()
     train_transform = transforms.Compose([transforms.ToTensor()])
     test_transform = transforms.Compose([transforms.ToTensor()])
     train_dataset.transform = train_transform
@@ -142,6 +140,7 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200,
     autoencoder = AutoEncoderMnist(encoder, decoder, dim_latent, pert)
     encoder.to(device)
     decoder.to(device)
+    autoencoder.to(device)
 
     # Train the denoising autoencoder
     save_dir = Path.cwd() / "results/mnist/consistency_examples"
@@ -149,9 +148,14 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200,
         os.makedirs(save_dir)
     autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs)
 
-    autoencoder.train().cpu()
-    IF_explainer = InfluenceFunctions(encoder, X_train, autoencoder.loss_f)
-    IF_explainer.attribute(X_test, [1, 2, 3, 4])
+    idx_subtrain = torch.randperm(len(train_dataset))[:corpus_size]
+    train_subset = torch.utils.data.Subset(train_dataset, idx_subtrain)
+    subtrain_loader = torch.utils.data.DataLoader(train_subset, batch_size=5)
+    idx_subtest = torch.randperm(len(test_dataset))[:corpus_size]
+    test_subset = torch.utils.data.Subset(test_dataset, idx_subtest)
+    subtest_loader = torch.utils.data.DataLoader(test_subset, batch_size=1)
+    IF_explainer = InfluenceFunction(autoencoder)
+    IF_explainer.attribute(device, subtrain_loader, subtest_loader, save_dir)
 
 
 def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs: int = 5,
