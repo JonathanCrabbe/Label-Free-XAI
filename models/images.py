@@ -99,6 +99,7 @@ class AutoEncoderMnist(nn.Module):
         self.input_pert = input_pert
         self.name = name
         self.loss_f = loss_f
+        self.checkpoints_files = []
 
     def forward(self, x):
         """
@@ -142,7 +143,7 @@ class AutoEncoderMnist(nn.Module):
 
     def fit(self, device: torch.device, train_loader: torch.utils.data.DataLoader,
             test_loader: torch.utils.data.DataLoader, save_dir: pathlib.Path,
-            n_epoch: int = 30, patience: int = 10) -> None:
+            n_epoch: int = 30, patience: int = 10, checkpoint_interval: int = -1) -> None:
         self.to(device)
         optim = torch.optim.Adam(self.parameters(), lr=1e-03, weight_decay=1e-05)
         waiting_epoch = 0
@@ -162,6 +163,12 @@ class AutoEncoderMnist(nn.Module):
                 self.to(device)
                 best_test_loss = test_loss.data
                 waiting_epoch = 0
+            if checkpoint_interval > 0 and epoch % checkpoint_interval == 0:
+                n_checkpoint = 1 + epoch // checkpoint_interval
+                logging.info(f'Saving checkpoint {n_checkpoint} in {save_dir}')
+                path_to_checkpoint = save_dir / f"{self.name}_checkpoint{n_checkpoint}.pt"
+                torch.save(self.state_dict(), path_to_checkpoint)
+                self.checkpoints_files.append(path_to_checkpoint)
             if waiting_epoch == patience:
                 logging.info(f'Early stopping activated')
                 break

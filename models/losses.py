@@ -51,6 +51,7 @@ class SupConLoss(torch.nn.Module):
         loss = 0
         return loss
 
+
 class BaseVAELoss(abc.ABC):
     """
     Base class for losses.

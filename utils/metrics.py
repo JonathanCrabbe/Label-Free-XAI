@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from scipy.stats import entropy, spearmanr
 
 
@@ -49,6 +50,18 @@ def count_activated_neurons(saliency: np.ndarray) -> np.ndarray:
     activated_neurons = saliency_filtered/saliency_filtered.sum(1, keepdims=True) > 1/latent_dim
     n_activated_neurons = np.count_nonzero(activated_neurons, axis=1)
     return np.mean(n_activated_neurons)
+
+
+def similarity_rate(example_importance: torch.Tensor, labels_subtrain: torch.Tensor, labels_test: torch.Tensor,
+                    num_classes: int) -> list:
+    test_size, subtrain_size = example_importance.shape
+    most_important_examples = torch.topk(example_importance, k=int(subtrain_size / num_classes))[1]
+    similarity_rates = []
+    for n in range(test_size):
+        most_important_labels = labels_subtrain[most_important_examples[n]]
+        similarity_rates.append(torch.count_nonzero(most_important_labels == labels_test[n]).item()
+                                / int(subtrain_size/num_classes))
+    return similarity_rates
 
 
 def compute_metrics(data: np.ndarray, metrics: callable) -> list:

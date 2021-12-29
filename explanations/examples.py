@@ -1,13 +1,105 @@
+import abc
 import numpy as np
 import torch
 import torch.nn as nn
 import logging
-import time
 import datetime
 from tqdm import tqdm
 from pathlib import Path
 from utils.influence import hessian_vector_product, stack_torch_tensors, save_json, display_progress, grad_z, s_test
 from torch.utils.data import DataLoader
+from abc import ABC
+
+
+class ExampleBasedExplainer(ABC):
+    def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable, **kwargs):
+        self.model = model
+        self.X_train = X_train
+        self.loss_f = loss_f
+
+    @abc.abstractmethod
+    def attribute(self, X_test: torch.Tensor, train_idx: list, **kwargs) -> torch.Tensor:
+        """
+
+        Args:
+            X_test:
+            train_idx:
+            **kwargs:
+
+        Returns:
+
+        """
+
+
+class InfluenceFunctions(ExampleBasedExplainer, ABC):
+    def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
+        super().__init__(model, X_train, loss_f)
+
+    def attribute(self, X_test: torch.Tensor, train_idx: list, batch_size: int = 300, damp: float = 1e-3,
+                  scale: float = 1000, recursion_depth: int = 1000, **kwargs) -> torch.Tensor:
+        """
+        Code adapted from https://github.com/ahmedmalaa/torch-influence-functions/
+        This function applies the stochastic estimation approach to evaluating influence function based on the power-series
+        approximation of matrix inversion. Recall that the exact inverse Hessian H^-1 can be computed as follows:
+        H^-1 = \sum^\infty_{i=0} (I - H) ^ j
+        This series converges if all the eigen values of H are less than 1.
+
+        Returns:
+            return_grads: list of torch tensors, contains product of Hessian and v.
+        """
+
+        SUBSAMPLES = batch_size
+        NUM_SAMPLES = self.X_train.shape[0]
+
+        loss = [self.loss_f(self.X_train[idx:idx+1], self.model(self.X_train[idx:idx+1]))
+                for idx in train_idx]
+
+        grads = [stack_torch_tensors(torch.autograd.grad(loss[k], self.model.encoder.parameters(),
+                                                         create_graph=True)) for k in range(len(train_idx))]
+
+        IHVP_ = [grads[k].detach().cpu().clone() for k in range(len(train_idx))]
+
+        for _ in tqdm(range(recursion_depth), unit="recursion", leave=False):
+            sampled_idx = np.random.choice(list(range(NUM_SAMPLES)), SUBSAMPLES)
+            sampled_loss = self.loss_f(self.X_train[sampled_idx],
+                                       self.model(self.X_train[sampled_idx]))
+            IHVP_prev = [IHVP_[k].detach().clone() for k in range(len(train_idx))]
+            hvps_ = [stack_torch_tensors(hessian_vector_product(sampled_loss, self.model, [IHVP_prev[k]]))
+                     for k in range(len(train_idx))]
+            IHVP_ = [g_ + (1 - damp) * ihvp_ - hvp_ / scale for (g_, ihvp_, hvp_) in zip(grads, IHVP_prev, hvps_)]
+
+        IHVP_ = [IHVP_[k] / (scale * NUM_SAMPLES) for k in range(len(train_idx))]  # Rescale Hessian-Vector products
+        IHVP_ = torch.stack(IHVP_, dim=0).reshape((len(train_idx), -1))  # Make a tensor (len(train_idx), n_params)
+
+        test_loss = [self.loss_f(X_test[idx:idx+1], self.model(X_test[idx:idx+1]))
+                     for idx in range(len(X_test))]
+        test_grads = [stack_torch_tensors(torch.autograd.grad(test_loss[k], self.model.encoder.parameters(),
+                                                              create_graph=True)) for k in range(len(X_test))]
+        test_grads = torch.stack(test_grads, dim=0).reshape((len(X_test), -1))
+        attribution = torch.einsum('ab,cb->ac', test_grads, IHVP_)
+        return attribution
+
+
+class TracIn(ExampleBasedExplainer, ABC):
+    def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
+        super().__init__(model, X_train, loss_f)
+
+    def attribute(self, X_test: torch.Tensor, train_idx: list, learning_rate: float = 1, **kwargs) -> torch.Tensor:
+        attribution = torch.zeros(len(X_test), len(train_idx))
+        for checkpoint_file in self.model.checkpoints_files:
+            self.model.load_state_dict(torch.load(checkpoint_file), strict=False)
+            train_loss = [self.loss_f(self.X_train[idx:idx + 1], self.model(self.X_train[idx:idx + 1]))
+                          for idx in train_idx]
+            train_grads = [stack_torch_tensors(torch.autograd.grad(train_loss[k], self.model.encoder.parameters(),
+                                               create_graph=True)) for k in range(len(train_idx))]
+            train_grads = torch.stack(train_grads, dim=0).reshape((len(train_idx), -1))
+            test_loss = [self.loss_f(X_test[idx:idx + 1], self.model(X_test[idx:idx + 1]))
+                         for idx in range(len(X_test))]
+            test_grads = [stack_torch_tensors(torch.autograd.grad(test_loss[k], self.model.encoder.parameters(),
+                                                                  create_graph=True)) for k in range(len(X_test))]
+            test_grads = torch.stack(test_grads, dim=0).reshape((len(X_test), -1))
+            attribution += torch.einsum('ab,cb->ac', test_grads, train_grads)
+        return learning_rate*attribution
 
 
 class InfluenceFunction:
@@ -180,53 +272,4 @@ class InfluenceFunction:
         """
 
 
-class InfluenceFunctions:
-    def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
-        self.model = model
-        self.X_train = X_train
-        self.loss_f = loss_f
 
-    def attribute(self, X_test: torch.Tensor, train_idx: list, batch_size: int = 300,
-                  damp: float = 1e-3, scale: float = 1000, recursion_depth: int = 1000) -> list:
-        """
-        Code adapted from https://github.com/ahmedmalaa/torch-influence-functions/
-        This function applies the stochastic estimation approach to evaluating influence function based on the power-series
-        approximation of matrix inversion. Recall that the exact inverse Hessian H^-1 can be computed as follows:
-        H^-1 = \sum^\infty_{i=0} (I - H) ^ j
-        This series converges if all the eigen values of H are less than 1.
-
-        Returns:
-            return_grads: list of torch tensors, contains product of Hessian and v.
-        """
-
-        SUBSAMPLES = batch_size
-        NUM_SAMPLES = self.X_train.shape[0]
-
-        loss = [self.loss_f(self.X_train[idx:idx+1], self.model(self.X_train[idx:idx+1]))
-                for idx in train_idx]
-
-        grads = [stack_torch_tensors(torch.autograd.grad(loss[k], self.model.encoder.parameters(),
-                                                         create_graph=True)) for k in range(len(train_idx))]
-
-        IHVP_ = [grads[k].detach().cpu().clone() for k in range(len(train_idx))]
-
-        for _ in tqdm(range(recursion_depth), unit="recursion", leave=False):
-            sampled_idx = np.random.choice(list(range(NUM_SAMPLES)), SUBSAMPLES)
-            sampled_loss = self.loss_f(self.X_train[sampled_idx],
-                                       self.model(self.X_train[sampled_idx]))
-            IHVP_prev = [IHVP_[k].detach().clone() for k in range(len(train_idx))]
-            hvps_ = [stack_torch_tensors(hessian_vector_product(sampled_loss, self.model, [IHVP_prev[k]]))
-                     for k in range(len(train_idx))]
-            IHVP_ = [g_ + (1 - damp) * ihvp_ - hvp_ / scale for (g_, ihvp_, hvp_) in zip(grads, IHVP_prev, hvps_)]
-
-        IHVP_ = [IHVP_[k] / (scale * NUM_SAMPLES) for k in range(len(train_idx))]  # Rescale Hessian-Vector products
-        IHVP_ = torch.stack(IHVP_, dim=0).reshape((len(train_idx), -1))  # Make a tensor (len(train_idx), n_params)
-
-        test_loss = [self.loss_f(X_test[idx:idx+1], self.model(X_test[idx:idx+1]))
-                     for idx in range(len(X_test))]
-        test_grads = [stack_torch_tensors(torch.autograd.grad(test_loss[k], self.model.encoder.parameters(),
-                                                              create_graph=True)) for k in range(len(X_test))]
-        test_grads = torch.stack(test_grads, dim=0).reshape((len(X_test), -1))
-        IF = torch.einsum('ab,cb->ac', test_grads, IHVP_)
-        logging.info(IF.shape)
-        return IF

@@ -15,12 +15,12 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from scipy.stats import pearsonr, spearmanr
 from explanations.features import AuxiliaryFunction, attribute_auxiliary, attribute_individual_dim
-from explanations.examples import InfluenceFunction, InfluenceFunctions
+from explanations.examples import InfluenceFunctions, TracIn
 from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, AutoEncoderMnist, VAE, EncoderBurgess, \
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
 from models.pretext import Identity, RandomNoise, Mask
-from utils.metrics import cos_saliency, entropy_saliency, \
+from utils.metrics import cos_saliency, entropy_saliency, similarity_rate, \
     count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency
 from utils.visualize import plot_vae_saliencies, vae_box_plots
 
@@ -57,6 +57,7 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
     if not save_dir.exists():
         os.makedirs(save_dir)
     autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs)
+    autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
 
     # Create dictionaries to store feature importance and shift induced by perturbations
     attr_dic = {'Gradient Shap': np.zeros((len(test_dataset), 1, 28, 28)),
@@ -115,8 +116,8 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
     plt.savefig(save_dir / "pixel_pert.pdf")
 
 
-def consistency_examples(random_seed: int = 1, batch_size: int = 200,
-                         dim_latent: int = 4, n_epochs: int = 1, subtrain_size: int = 100) -> None:
+def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent: int = 4,
+                         n_epochs: int = 1, subtrain_size: int = 100) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -150,14 +151,19 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200,
     save_dir = Path.cwd() / "results/mnist/consistency_examples"
     if not save_dir.exists():
         os.makedirs(save_dir)
-    autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs)
+    autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs, checkpoint_interval=5)
+    autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
 
     autoencoder.train().cpu()
-    idx_subtrain = [torch.nonzero(test_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
-    labels_subtrain = test_dataset.targets[idx_subtrain]
-    logging.info(labels_subtrain)
-    IF_explainer = InfluenceFunctions(autoencoder, X_train, torch.nn.MSELoss())
-    IF_explainer.attribute(X_test, idx_subtrain)
+    mse_loss = torch.nn.MSELoss()
+    explainer_list = [InfluenceFunctions(autoencoder, X_train, mse_loss),
+                      TracIn(autoencoder, X_train, mse_loss)]
+    idx_subtrain = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
+    labels_subtrain = train_dataset.targets[idx_subtrain]
+    for explainer in explainer_list:
+        attribution = explainer.attribute(X_test, idx_subtrain, recursion_depth=1)
+        similarity_rates = similarity_rate(attribution, labels_subtrain, test_dataset.targets, 10)
+        logging.info(np.mean(similarity_rates))
 
 
 def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs: int = 5,
