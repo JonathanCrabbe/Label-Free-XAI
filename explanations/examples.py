@@ -2,6 +2,7 @@ import abc
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import logging
 import datetime
 from tqdm import tqdm
@@ -101,6 +102,36 @@ class TracIn(ExampleBasedExplainer, ABC):
             attribution += torch.einsum('ab,cb->ac', test_grads, train_grads)
         return learning_rate*attribution
 
+
+class SimplEx(ExampleBasedExplainer, ABC):
+    def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
+        super().__init__(model, X_train, loss_f)
+
+    def attribute(self, X_test: torch.Tensor, train_idx: list, learning_rate: float = 1,
+                  batch_size: int = 500, **kwargs) -> torch.Tensor:
+        attribution = torch.zeros(len(X_test), len(train_idx))
+        train_representations = self.model.encoder(self.X_train[train_idx]).detach()
+        n_batch = int(len(X_test)/batch_size)
+        for n in tqdm(range(n_batch), unit="batch", leave=False):
+            batch_features = X_test[n*batch_size:(n+1)*batch_size]
+            batch_representations = self.model.encoder(batch_features).detach()
+            attribution[n*batch_size:(n+1)*batch_size] = self.compute_weights(batch_representations,
+                                                                              train_representations)
+        return attribution
+
+    @staticmethod
+    def compute_weights(batch_representations: torch.Tensor, train_representations: torch.Tensor,
+                        n_epoch: int = 10000) -> torch.Tensor:
+        preweights = torch.zeros((len(batch_representations), len(train_representations)), requires_grad=True)
+        optimizer = torch.optim.Adam([preweights])
+        for epoch in range(n_epoch):
+            optimizer.zero_grad()
+            weights = F.softmax(preweights, dim=-1)
+            approx_representations = torch.einsum('ij,jk->ik', weights, train_representations)
+            error = ((approx_representations - batch_representations) ** 2).sum()
+            error.backward()
+            optimizer.step()
+        return torch.softmax(preweights, dim=-1).detach()
 
 class InfluenceFunction:
     def __init__(self, model: nn.Module):

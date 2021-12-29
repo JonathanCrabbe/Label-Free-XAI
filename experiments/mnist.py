@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from scipy.stats import pearsonr, spearmanr
 from explanations.features import AuxiliaryFunction, attribute_auxiliary, attribute_individual_dim
-from explanations.examples import InfluenceFunctions, TracIn
+from explanations.examples import InfluenceFunctions, TracIn, SimplEx
 from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, AutoEncoderMnist, VAE, EncoderBurgess, \
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
@@ -157,11 +157,13 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
     autoencoder.train().cpu()
     mse_loss = torch.nn.MSELoss()
     explainer_list = [InfluenceFunctions(autoencoder, X_train, mse_loss),
-                      TracIn(autoencoder, X_train, mse_loss)]
+                      TracIn(autoencoder, X_train, mse_loss),
+                      SimplEx(autoencoder, X_train, mse_loss)]
     idx_subtrain = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
     labels_subtrain = train_dataset.targets[idx_subtrain]
     for explainer in explainer_list:
         attribution = explainer.attribute(X_test, idx_subtrain, recursion_depth=1)
+        autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
         similarity_rates = similarity_rate(attribution, labels_subtrain, test_dataset.targets, 10)
         logging.info(np.mean(similarity_rates))
 

@@ -119,7 +119,7 @@ class AutoEncoderMnist(nn.Module):
                     optimizer: torch.optim.Optimizer) -> np.ndarray:
         self.train()
         train_loss = []
-        for image_batch, _ in tqdm(dataloader, unit="batches", leave=False):
+        for image_batch, _ in tqdm(dataloader, unit="batch", leave=False):
             image_batch = image_batch.to(device)
             recon_batch = self.forward(image_batch)
             loss = self.loss_f(image_batch, recon_batch)
