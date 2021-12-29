@@ -105,6 +105,7 @@ def display_progress(text, current_step, last_step, enabled=True,
 
     sys.stdout.flush()
 
+
 def grad_z(x: torch.Tensor, model: torch.nn.Module):
     """Calculates the gradient z. One grad_z should be computed for each
     training sample.
@@ -122,7 +123,7 @@ def grad_z(x: torch.Tensor, model: torch.nn.Module):
     x_recon = model(x)
     loss = mse(x, x_recon)
     # Compute sum of gradients from model parameters to loss
-    params = [ p for p in model.parameters() if p.requires_grad ]
+    params = [ p for p in model.encoder.parameters() if p.requires_grad ]
     return list(grad(loss, params, create_graph=True))
 
 
@@ -158,7 +159,7 @@ def s_test(device, x_test, model, train_loader, damp=0.01, scale=25.0, recursion
             x = x.to(device)
             x_recon = model(x)
             loss = mse(x, x_recon)
-            params = [ p for p in model.parameters() if p.requires_grad ]
+            params = [ p for p in model.encoder.parameters() if p.requires_grad ]
             hv = hvp(loss, params, h_estimate)
             # Recursively caclulate h_estimate
             h_estimate = [
@@ -206,6 +207,7 @@ def hvp(y, w, v):
 Ahmed's version:
 """
 
+
 def stack_torch_tensors(input_tensors):
     '''
     Takes a list of tensors and stacks them into one tensor
@@ -248,7 +250,7 @@ def hessian_vector_product(loss, model, v):
 
     # First backprop
     first_grads = stack_torch_tensors(
-        torch.autograd.grad(loss, model.parameters(), retain_graph=True, create_graph=True))
+        torch.autograd.grad(loss, model.encoder.parameters(), retain_graph=True, create_graph=True))
 
     # Elementwise products
     elemwise_products = 0
@@ -257,7 +259,7 @@ def hessian_vector_product(loss, model, v):
         elemwise_products += torch.sum(grad_elem * v_elem)
 
     # Second backprop
-    HVP_ = torch.autograd.grad(elemwise_products, model.parameters(), create_graph=True)
+    HVP_ = torch.autograd.grad(elemwise_products, model.encoder.parameters(), create_graph=True)
 
     return HVP_
 

@@ -180,7 +180,7 @@ class InfluenceFunction:
         """
 
 
-class InfluenceFunctionsOld:
+class InfluenceFunctions:
     def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
         self.model = model
         self.X_train = X_train
@@ -205,18 +205,18 @@ class InfluenceFunctionsOld:
         loss = [self.loss_f(self.X_train[idx:idx+1], self.model(self.X_train[idx:idx+1]))
                 for idx in train_idx]
 
-        grads = [stack_torch_tensors(torch.autograd.grad(loss[k], self.model.parameters(), create_graph=True)) for k in
-                 range(len(train_idx))]
+        grads = [stack_torch_tensors(torch.autograd.grad(loss[k], self.model.encoder.parameters(),
+                                                         create_graph=True)) for k in range(len(train_idx))]
 
-        IHVP_ = [grads[k].clone().detach() for k in range(len(train_idx))]
+        IHVP_ = [grads[k].detach().cpu().clone() for k in range(len(train_idx))]
 
         for _ in tqdm(range(recursion_depth), unit="recursion", leave=False):
             sampled_idx = np.random.choice(list(range(NUM_SAMPLES)), SUBSAMPLES)
-            sampled_loss = self.loss_f(self.X_train[sampled_idx], self.model(self.X_train[sampled_idx]))
-            IHVP_prev = [IHVP_[k].clone().detach() for k in range(len(train_idx))]
-            hvps_ = [stack_torch_tensors(hessian_vector_product(sampled_loss, self.model, [IHVP_prev[k]])) for k in
-                     range(len(train_idx))]
-
+            sampled_loss = self.loss_f(self.X_train[sampled_idx],
+                                       self.model(self.X_train[sampled_idx]))
+            IHVP_prev = [IHVP_[k].detach().clone() for k in range(len(train_idx))]
+            hvps_ = [stack_torch_tensors(hessian_vector_product(sampled_loss, self.model, [IHVP_prev[k]]))
+                     for k in range(len(train_idx))]
             IHVP_ = [g_ + (1 - damp) * ihvp_ - hvp_ / scale for (g_, ihvp_, hvp_) in zip(grads, IHVP_prev, hvps_)]
 
         IHVP_ = [IHVP_[k] / (scale * NUM_SAMPLES) for k in range(len(train_idx))]  # Rescale Hessian-Vector products
@@ -224,8 +224,8 @@ class InfluenceFunctionsOld:
 
         test_loss = [self.loss_f(X_test[idx:idx+1], self.model(X_test[idx:idx+1]))
                      for idx in range(len(X_test))]
-        test_grads = [stack_torch_tensors(torch.autograd.grad(test_loss[k], self.model.parameters(), create_graph=True))
-                      for k in range(len(X_test))]
+        test_grads = [stack_torch_tensors(torch.autograd.grad(test_loss[k], self.model.encoder.parameters(),
+                                                              create_graph=True)) for k in range(len(X_test))]
         test_grads = torch.stack(test_grads, dim=0).reshape((len(X_test), -1))
         IF = torch.einsum('ab,cb->ac', test_grads, IHVP_)
         logging.info(IF.shape)
