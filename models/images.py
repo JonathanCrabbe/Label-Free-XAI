@@ -100,6 +100,7 @@ class AutoEncoderMnist(nn.Module):
         self.name = name
         self.loss_f = loss_f
         self.checkpoints_files = []
+        self.lr = None
 
     def forward(self, x):
         """
@@ -145,7 +146,8 @@ class AutoEncoderMnist(nn.Module):
             test_loader: torch.utils.data.DataLoader, save_dir: pathlib.Path,
             n_epoch: int = 30, patience: int = 10, checkpoint_interval: int = -1) -> None:
         self.to(device)
-        optim = torch.optim.Adam(self.parameters(), lr=1e-03, weight_decay=1e-05)
+        self.lr = 1e-03
+        optim = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-05)
         waiting_epoch = 0
         best_test_loss = float("inf")
         for epoch in range(n_epoch):

@@ -31,6 +31,14 @@ class ExampleBasedExplainer(ABC):
 
         """
 
+    @abc.abstractmethod
+    def __str__(self):
+        """
+
+        Returns: The name of the method
+
+        """
+
 
 class InfluenceFunctions(ExampleBasedExplainer, ABC):
     def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
@@ -80,6 +88,9 @@ class InfluenceFunctions(ExampleBasedExplainer, ABC):
         attribution = torch.einsum('ab,cb->ac', test_grads, IHVP_)
         return attribution
 
+    def __str__(self):
+        return "Influence Functions"
+
 
 class TracIn(ExampleBasedExplainer, ABC):
     def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
@@ -101,6 +112,9 @@ class TracIn(ExampleBasedExplainer, ABC):
             test_grads = torch.stack(test_grads, dim=0).reshape((len(X_test), -1))
             attribution += torch.einsum('ab,cb->ac', test_grads, train_grads)
         return learning_rate*attribution
+
+    def __str__(self):
+        return "TracIn"
 
 
 class SimplEx(ExampleBasedExplainer, ABC):
@@ -132,6 +146,29 @@ class SimplEx(ExampleBasedExplainer, ABC):
             error.backward()
             optimizer.step()
         return torch.softmax(preweights, dim=-1).detach()
+
+    def __str__(self):
+        return "SimplEx"
+
+
+class NearestNeighbours(ExampleBasedExplainer, ABC):
+    def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
+        super().__init__(model, X_train, loss_f)
+
+    def attribute(self, X_test: torch.Tensor, train_idx: list, batch_size: int = 500, **kwargs) -> torch.Tensor:
+        attribution = torch.zeros(len(X_test), len(train_idx))
+        train_representations = self.model.encoder(self.X_train[train_idx]).detach().unsqueeze(0)
+        n_batch = int(len(X_test)/batch_size)
+        for n in tqdm(range(n_batch), unit="batch", leave=False):
+            batch_features = X_test[n*batch_size:(n+1)*batch_size]
+            batch_representations = self.model.encoder(batch_features).detach().unsqueeze(1)
+            attribution[n*batch_size:(n+1)*batch_size] =\
+                1/torch.sum((batch_representations-train_representations)**2, dim=-1)
+        return attribution
+
+    def __str__(self):
+        return "Nearest Neighbours"
+
 
 class InfluenceFunction:
     def __init__(self, model: nn.Module):

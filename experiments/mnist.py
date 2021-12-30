@@ -9,13 +9,14 @@ import torch
 import torchvision
 import itertools
 import argparse
+import tabulate
 import csv
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from scipy.stats import pearsonr, spearmanr
 from explanations.features import AuxiliaryFunction, attribute_auxiliary, attribute_individual_dim
-from explanations.examples import InfluenceFunctions, TracIn, SimplEx
+from explanations.examples import InfluenceFunctions, TracIn, SimplEx, NearestNeighbours
 from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, AutoEncoderMnist, VAE, EncoderBurgess, \
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
@@ -117,7 +118,7 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
 
 
 def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent: int = 4,
-                         n_epochs: int = 1, subtrain_size: int = 100) -> None:
+                         n_epochs: int = 100, subtrain_size: int = 100) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -154,18 +155,26 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
     autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs, checkpoint_interval=5)
     autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
 
+    # Fitting explainers, computing the metric and saving everything
     autoencoder.train().cpu()
     mse_loss = torch.nn.MSELoss()
     explainer_list = [InfluenceFunctions(autoencoder, X_train, mse_loss),
                       TracIn(autoencoder, X_train, mse_loss),
-                      SimplEx(autoencoder, X_train, mse_loss)]
+                      SimplEx(autoencoder, X_train, mse_loss),
+                      NearestNeighbours(autoencoder, X_train, mse_loss)]
+    results_list = []
     idx_subtrain = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
     labels_subtrain = train_dataset.targets[idx_subtrain]
     for explainer in explainer_list:
-        attribution = explainer.attribute(X_test, idx_subtrain, recursion_depth=1)
+        logging.info(f"Now fitting {explainer} exaplainer")
+        attribution = explainer.attribute(X_test, idx_subtrain, recursion_depth=1000, learning_rate=autoencoder.lr)
         autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
         similarity_rates = similarity_rate(attribution, labels_subtrain, test_dataset.targets, 10)
-        logging.info(np.mean(similarity_rates))
+        results_list += [[str(explainer), metric] for metric in similarity_rates]
+    results_df = pd.DataFrame(results_list, columns=["Explainer", "Similarity Rate"])
+    results_df.to_csv(save_dir/"metrics.csv")
+    sns.boxplot(x="Explainer", y="Similarity Rate", data=results_df, palette="colorblind")
+    plt.savefig(save_dir/"box_plots.pdf")
 
 
 def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs: int = 5,
