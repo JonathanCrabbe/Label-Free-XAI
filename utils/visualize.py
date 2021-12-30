@@ -1,9 +1,10 @@
-from captum.attr._utils.visualization import visualize_image_attr
 import torch
 import seaborn as sns
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from captum.attr._utils.visualization import visualize_image_attr
+from tabulate import tabulate
 
 
 def plot_image_saliency(image: torch.Tensor, saliency: torch.Tensor):
@@ -39,3 +40,10 @@ def vae_box_plots(df: pd.DataFrame, metric_names: list) -> plt.Figure:
     for id_metric, metric in enumerate(metric_names):
         sns.boxplot(data=df, x="Beta", y=metric, hue="Loss Type", palette="colorblind", ax=axs[id_metric])
     return fig
+
+
+def correlation_latex_table(corr_avg: np.ndarray, corr_std: np.ndarray, headers: list) -> str:
+    table = [[headers[i]] + [f"{corr_avg[i,j]} \pm {corr_std[i,j]}" for j in range(corr_avg.shape[0])]
+             for i in range(corr_avg.shape[0])]
+    return tabulate(table, tablefmt="latex_raw", headers=headers)
+

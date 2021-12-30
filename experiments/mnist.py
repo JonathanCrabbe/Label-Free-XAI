@@ -9,7 +9,6 @@ import torch
 import torchvision
 import itertools
 import argparse
-import tabulate
 import csv
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
 from torch.utils.data import DataLoader, random_split
@@ -23,7 +22,7 @@ from models.losses import BetaHLoss, BtcvaeLoss
 from models.pretext import Identity, RandomNoise, Mask
 from utils.metrics import cos_saliency, entropy_saliency, similarity_rate, \
     count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency
-from utils.visualize import plot_vae_saliencies, vae_box_plots
+from utils.visualize import plot_vae_saliencies, vae_box_plots, correlation_latex_table
 
 
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
@@ -178,11 +177,13 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
 
 
 def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs: int = 5,
-                             dim_latent: int = 4, n_epochs: int = 100, patience: int = 10) -> None:
+                             dim_latent: int = 4, n_epochs: int = 100, patience: int = 10,
+                             subtrain_size: int = 100) -> None:
     # Initialize seed and device
     np.random.seed(random_seed)
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    mse_loss = torch.nn.MSELoss()
 
     # Load MNIST
     data_dir = Path.cwd() / "data/mnist"
@@ -194,6 +195,11 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
     test_dataset.transform = test_transform
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    X_train = train_dataset.data
+    X_train = X_train.unsqueeze(1).float()
+    X_test = test_dataset.data
+    X_test = X_test.unsqueeze(1).float()
+    idx_subtrain = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
 
     # Create saving directory
     save_dir = Path.cwd() / "results/mnist/pretext"
@@ -204,11 +210,15 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
     # Define the computed metrics and create a csv file with appropriate headers
     pretext_list = [Identity(), RandomNoise(noise_level=0.3), Mask(mask_proportion=0.2)]
     n_tasks = len(pretext_list) + 1
-    pearson = np.zeros((n_runs, n_tasks, n_tasks))
-    spearman = np.zeros((n_runs, n_tasks, n_tasks))
+    feature_pearson = np.zeros((n_runs, n_tasks, n_tasks))
+    feature_spearman = np.zeros((n_runs, n_tasks, n_tasks))
+    example_pearson = np.zeros((n_runs, n_tasks, n_tasks))
+    example_spearman = np.zeros((n_runs, n_tasks, n_tasks))
 
     for run in range(n_runs):
-        attributions = []
+        feature_importance = []
+        example_importance = []
+        # Perform the experiment with several autoencoders trained on different pretext tasks.
         for pretext in pretext_list:
             # Create and fit an autoencoder for the pretext task
             name = f'{str(pretext)}-ae_run{run}'
@@ -218,12 +228,18 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
             logging.info(f"Now fitting {name}")
             model.fit(device, train_loader, test_loader, save_dir, n_epochs, patience)
             model.load_state_dict(torch.load(save_dir / (name + ".pt")), strict=False)
-            # Compute test-set saliency
+            # Compute feature importance
+            logging.info("Computing feature importance")
             baseline_image = torch.zeros((1, 1, 28, 28), device=device)
             gradshap = GradientShap(encoder)
-            attributions.append(np.abs(np.expand_dims(attribute_auxiliary(encoder, test_loader, device,
+            feature_importance.append(np.abs(np.expand_dims(attribute_auxiliary(encoder, test_loader, device,
                                                                           gradshap, baseline_image), 0)))
-        # Create and fit a MNIST classfier
+            # Compute example importance
+            logging.info("Computing example importance")
+            simplex = SimplEx(model.cpu(), X_train, mse_loss)
+            example_importance.append(np.expand_dims(simplex.attribute(X_test, idx_subtrain).cpu().numpy(), 0))
+
+        # Create and fit a MNIST classifier
         name = f'Classifier_run{run}'
         encoder = EncoderMnist(dim_latent)
         classifier = ClassifierMnist(encoder, dim_latent, name)
@@ -231,20 +247,45 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
         classifier.fit(device, train_loader, test_loader, save_dir, n_epochs, patience)
         classifier.load_state_dict(torch.load(save_dir / (name + ".pt")), strict=False)
         baseline_image = torch.zeros((1, 1, 28, 28), device=device)
+        # Compute feature importance for the classifier
+        logging.info("Computing feature importance")
         gradshap = GradientShap(encoder)
-        attributions.append(np.abs(np.expand_dims(attribute_auxiliary(encoder, test_loader, device,
+        feature_importance.append(np.abs(np.expand_dims(attribute_auxiliary(encoder, test_loader, device,
                                                                       gradshap, baseline_image), 0)))
+        # Compute example importance for the classifier
+        logging.info("Computing example importance")
+        simplex = SimplEx(classifier.cpu(), X_train, mse_loss)
+        example_importance.append(np.expand_dims(simplex.attribute(X_test, idx_subtrain).cpu().numpy(), 0))
 
-        # Compute correlation between the saliency of different
-        attributions = np.concatenate(attributions)
-        pearson[run] = np.corrcoef(attributions.reshape((n_tasks, -1)))
-        spearman[run] = spearmanr(attributions.reshape((n_tasks, -1)), axis=1)[0]
-        logging.info(f'Run {run} complete \n Pearson \n {np.round(pearson[run], decimals=2)} '
-                     f'\n Spearman \n {np.round(spearman[run], decimals=2)}')
-    logging.info(f'Average Pearson \n {np.round(np.mean(pearson, axis=0), decimals=2)} \n'
-                 f' Std Pearson \n {np.round(np.std(pearson, axis=0), decimals=2)} ')
-    logging.info(f'Average Spearman \n {np.round(np.mean(spearman, axis=0), decimals=2)} \n '
-                 f'Std Spearman \n {np.round(np.std(spearman, axis=0), decimals=2)} \n')
+        # Compute correlation between the saliency of different pretext tasks
+        feature_importance = np.concatenate(feature_importance)
+        feature_pearson[run] = np.corrcoef(feature_importance.reshape((n_tasks, -1)))
+        feature_spearman[run] = spearmanr(feature_importance.reshape((n_tasks, -1)), axis=1)[0]
+        example_importance = np.concatenate(example_importance)
+        example_pearson[run] = np.corrcoef(example_importance.reshape((n_tasks, -1)))
+        example_spearman[run] = spearmanr(example_importance.reshape((n_tasks, -1)), axis=1)[0]
+        logging.info(f'Run {run} complete \n Feature Pearson \n {np.round(feature_pearson[run], decimals=2)}'
+                     f'\n Feature Spearman \n {np.round(feature_spearman[run], decimals=2)}'
+                     f'\n Example Pearson \n {np.round(example_pearson[run], decimals=2)}'
+                     f'\n Example Spearman \n {np.round(example_spearman[run], decimals=2)}')
+
+    # Compute the avg and std for each metric
+    feature_pearson_avg = np.round(np.mean(feature_pearson, axis=0), decimals=2)
+    feature_pearson_std = np.round(np.std(feature_pearson, axis=0), decimals=2)
+    feature_spearman_avg = np.round(np.mean(feature_spearman, axis=0), decimals=2)
+    feature_spearman_std = np.round(np.std(feature_spearman, axis=0), decimals=2)
+    example_pearson_avg = np.round(np.mean(example_pearson, axis=0), decimals=2)
+    example_pearson_std = np.round(np.std(example_pearson, axis=0), decimals=2)
+    example_spearman_avg = np.round(np.mean(example_spearman, axis=0), decimals=2)
+    example_spearman_std = np.round(np.std(example_spearman, axis=0), decimals=2)
+    headers = [str(pretext) for pretext in pretext_list] + ["Classification"] # Headers for table
+
+    with open(save_dir/'tables.tex', 'w') as f:
+        for corr_avg, corr_std in zip(
+                [feature_pearson_avg, feature_spearman_avg, example_pearson_avg, example_spearman_avg],
+                [feature_pearson_std, feature_spearman_std, example_pearson_std, example_spearman_std]):
+            f.write(correlation_latex_table(corr_avg, corr_std, headers))
+            f.write("\n")
 
 
 def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plots: int = 20, n_runs: int = 5,

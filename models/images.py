@@ -220,6 +220,7 @@ class AutoEncoderMnist(nn.Module):
 class ClassifierMnist(nn.Module):
     def __init__(self, encoder: EncoderMnist, latent_dim: int, name: str):
         super().__init__()
+        self.encoder = encoder
         self.encoder_cnn = encoder.encoder_cnn
         self.flatten = nn.Flatten(start_dim=1)
         self.encoder_lin = encoder.encoder_lin
