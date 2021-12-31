@@ -151,7 +151,7 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
     save_dir = Path.cwd() / "results/mnist/consistency_examples"
     if not save_dir.exists():
         os.makedirs(save_dir)
-    autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs, checkpoint_interval=5)
+    autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs, checkpoint_interval=10)
     autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
 
     # Fitting explainers, computing the metric and saving everything
