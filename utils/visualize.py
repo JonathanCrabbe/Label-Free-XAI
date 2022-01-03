@@ -43,7 +43,7 @@ def vae_box_plots(df: pd.DataFrame, metric_names: list) -> plt.Figure:
 
 
 def correlation_latex_table(corr_avg: np.ndarray, corr_std: np.ndarray, headers: list) -> str:
-    table = [[headers[i]] + [f"{corr_avg[i,j]} \pm {corr_std[i,j]}" for j in range(corr_avg.shape[0])]
+    table = [[headers[i]] + [f"${corr_avg[i,j]} \pm {corr_std[i,j]}$" for j in range(corr_avg.shape[0])]
              for i in range(corr_avg.shape[0])]
     return tabulate(table, tablefmt="latex_raw", headers=headers)
 
