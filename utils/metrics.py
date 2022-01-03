@@ -53,14 +53,14 @@ def count_activated_neurons(saliency: np.ndarray) -> np.ndarray:
 
 
 def similarity_rate(example_importance: torch.Tensor, labels_subtrain: torch.Tensor, labels_test: torch.Tensor,
-                    num_classes: int) -> list:
+                    num_top: int = 5) -> list:
     test_size, subtrain_size = example_importance.shape
-    most_important_examples = torch.topk(example_importance, k=int(subtrain_size / num_classes))[1]
+    most_important_examples = torch.topk(example_importance, k=num_top)[1]
     similarity_rates = []
     for n in range(test_size):
         most_important_labels = labels_subtrain[most_important_examples[n]]
         similarity_rates.append(torch.count_nonzero(most_important_labels == labels_test[n]).item()
-                                / int(subtrain_size/num_classes))
+                                / num_top)
     return similarity_rates
 
 

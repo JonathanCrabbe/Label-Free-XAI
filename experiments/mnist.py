@@ -168,7 +168,7 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
         logging.info(f"Now fitting {explainer} exaplainer")
         attribution = explainer.attribute(X_test, idx_subtrain, recursion_depth=1000, learning_rate=autoencoder.lr)
         autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
-        similarity_rates = similarity_rate(attribution, labels_subtrain, test_dataset.targets, 10)
+        similarity_rates = similarity_rate(attribution, labels_subtrain, test_dataset.targets)
         results_list += [[str(explainer), metric] for metric in similarity_rates]
     results_df = pd.DataFrame(results_list, columns=["Explainer", "Similarity Rate"])
     results_df.to_csv(save_dir/"metrics.csv")
