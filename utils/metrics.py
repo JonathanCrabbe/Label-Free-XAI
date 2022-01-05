@@ -64,6 +64,21 @@ def similarity_rate(example_importance: torch.Tensor, labels_subtrain: torch.Ten
     return similarity_rates
 
 
+def top_consistency(example_importances: torch.Tensor, num_top: int = 5) -> np.ndarray:
+    n_tasks, n_test, n_train = example_importances.shape
+    top_idx = torch.topk(torch.from_numpy(example_importances), num_top)[1]
+    consistency_matrix = np.ones((n_tasks, n_tasks))
+    for task1 in range(1, n_tasks):
+        for task2 in range(task1):
+            top_task1 = top_idx[task1].numpy()
+            top_task2 = top_idx[task2].numpy()
+            consistency_matrix[task1, task2] = np.sum(
+                [len(np.intersect1d(top_task1[id_test], top_task2[id_test])) for id_test in range(n_test)]
+            ) / (num_top*n_test)
+            consistency_matrix[task2, task1] = consistency_matrix[task1, task2]
+    return consistency_matrix
+
+
 def compute_metrics(data: np.ndarray, metrics: callable) -> list:
     return [metric(data) for metric in metrics]
 

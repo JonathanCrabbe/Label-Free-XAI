@@ -13,6 +13,44 @@ def plot_image_saliency(image: torch.Tensor, saliency: torch.Tensor):
     visualize_image_attr(saliency_np, image_np)
 
 
+def plot_pretext_saliencies(images: list, saliency: np.ndarray, pretext_names: list) -> plt.Figure:
+    W = saliency.shape[-1]
+    n_pretext = len(pretext_names)
+    n_plots = len(images)
+    cblind_palette = sns.color_palette("colorblind")
+    fig, axs = plt.subplots(ncols=n_pretext, nrows=n_plots, figsize=(3 * n_pretext, 3 * n_plots))
+    for example_id in range(n_plots):
+        for pretext_id, pretext in enumerate(pretext_names):
+            sub_saliency = saliency[pretext_id, example_id]
+            ax = axs[example_id, pretext_id]
+            ax.imshow(images[example_id], cmap='gray', zorder=1)
+            ax.axis('off')
+            sns.heatmap(np.reshape(sub_saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
+                        ax=ax, cmap=sns.light_palette(cblind_palette[pretext_id], as_cmap=True), cbar=False,
+                        alpha=.8, zorder=2, vmin=0)
+            ax.set_title(f'Saliency {pretext}')
+    return fig
+
+
+def plot_pretext_top_example(train_images: list, test_images: list, example_importance: np.ndarray,
+                     pretext_names: list) -> plt.Figure:
+    n_pretext = len(pretext_names)
+    n_plots = len(test_images)
+    fig, axs = plt.subplots(ncols=n_pretext+1, nrows=n_plots, figsize=(3 * (n_pretext+1), 3 * n_plots))
+    for example_id in range(n_plots):
+        ax = axs[example_id, 0]
+        ax.imshow(test_images[example_id], cmap='gray')
+        ax.axis('off')
+        ax.set_title('Test Image')
+        for pretext_id, pretext in enumerate(pretext_names):
+            top_id = np.argmax(example_importance[pretext_id, example_id, :])
+            ax = axs[example_id, pretext_id+1]
+            ax.imshow(train_images[top_id], cmap='gray')
+            ax.axis('off')
+            ax.set_title(f'Top Image {pretext}')
+    return fig
+
+
 def plot_vae_saliencies(images: list, saliency: np.ndarray) -> plt.Figure:
     W = saliency.shape[-1]
     n_plots = len(saliency)

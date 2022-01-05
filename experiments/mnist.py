@@ -13,7 +13,7 @@ import csv
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
-from scipy.stats import pearsonr, spearmanr
+from scipy.stats import  spearmanr
 from explanations.features import AuxiliaryFunction, attribute_auxiliary, attribute_individual_dim
 from explanations.examples import InfluenceFunctions, TracIn, SimplEx, NearestNeighbours
 from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, AutoEncoderMnist, VAE, EncoderBurgess, \
@@ -21,8 +21,10 @@ from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, AutoEncod
 from models.losses import BetaHLoss, BtcvaeLoss
 from models.pretext import Identity, RandomNoise, Mask
 from utils.metrics import cos_saliency, entropy_saliency, similarity_rate, \
-    count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency
-from utils.visualize import plot_vae_saliencies, vae_box_plots, correlation_latex_table
+    count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency, top_consistency
+from utils.visualize import plot_vae_saliencies, vae_box_plots, correlation_latex_table, plot_pretext_saliencies,\
+plot_pretext_top_example
+
 
 
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
@@ -178,7 +180,7 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
 
 def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs: int = 5,
                              dim_latent: int = 4, n_epochs: int = 100, patience: int = 10,
-                             subtrain_size: int = 100) -> None:
+                             subtrain_size: int = 100, n_plots: int = 10) -> None:
     # Initialize seed and device
     np.random.seed(random_seed)
     torch.random.manual_seed(random_seed)
@@ -186,6 +188,7 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
     mse_loss = torch.nn.MSELoss()
 
     # Load MNIST
+    W = 28
     data_dir = Path.cwd() / "data/mnist"
     train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
     test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
@@ -209,6 +212,7 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
 
     # Define the computed metrics and create a csv file with appropriate headers
     pretext_list = [Identity(), RandomNoise(noise_level=0.3), Mask(mask_proportion=0.2)]
+    headers = [str(pretext) for pretext in pretext_list] + ["Classification"]  # Name of each task
     n_tasks = len(pretext_list) + 1
     feature_pearson = np.zeros((n_runs, n_tasks, n_tasks))
     feature_spearman = np.zeros((n_runs, n_tasks, n_tasks))
@@ -269,6 +273,19 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
                      f'\n Example Pearson \n {np.round(example_pearson[run], decimals=2)}'
                      f'\n Example Spearman \n {np.round(example_spearman[run], decimals=2)}')
 
+        # Plot a couple of examples
+        idx_plot = [torch.nonzero(test_dataset.targets == (n % 10))[n // 10].item() for n in range(n_plots)]
+        test_images_to_plot = [X_test[i][0].numpy().reshape(W, W) for i in idx_plot]
+        train_images_to_plot = [X_train[i][0].numpy().reshape(W, W) for i in idx_subtrain]
+        fig_features = plot_pretext_saliencies(test_images_to_plot,
+                                               feature_importance[:, idx_plot, :, :, :], headers)
+        fig_features.savefig(save_dir / f"saliency_maps_run{run}.pdf")
+        plt.close(fig_features)
+        fig_examples = plot_pretext_top_example(train_images_to_plot, test_images_to_plot,
+                                                example_importance[:, idx_plot, :], headers)
+        fig_examples.savefig(save_dir / f"top_examples_run{run}.pdf")
+        plt.close(fig_features)
+
     # Compute the avg and std for each metric
     feature_pearson_avg = np.round(np.mean(feature_pearson, axis=0), decimals=2)
     feature_pearson_std = np.round(np.std(feature_pearson, axis=0), decimals=2)
@@ -278,8 +295,8 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
     example_pearson_std = np.round(np.std(example_pearson, axis=0), decimals=2)
     example_spearman_avg = np.round(np.mean(example_spearman, axis=0), decimals=2)
     example_spearman_std = np.round(np.std(example_spearman, axis=0), decimals=2)
-    headers = [str(pretext) for pretext in pretext_list] + ["Classification"] # Headers for table
 
+    # Format the metrics in Latex tables
     with open(save_dir/'tables.tex', 'w') as f:
         for corr_avg, corr_std in zip(
                 [feature_pearson_avg, feature_spearman_avg, example_pearson_avg, example_spearman_avg],
