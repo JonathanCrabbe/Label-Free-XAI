@@ -26,7 +26,6 @@ from utils.visualize import plot_vae_saliencies, vae_box_plots, correlation_late
 plot_pretext_top_example
 
 
-
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
                                    dim_latent: int = 4, n_epochs: int = 100) -> None:
     # Initialize seed and device
@@ -119,7 +118,7 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
 
 
 def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent: int = 4,
-                         n_epochs: int = 100, subtrain_size: int = 100) -> None:
+                         n_epochs: int = 100, subtrain_size: int = 1000) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -153,7 +152,7 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
     save_dir = Path.cwd() / "results/mnist/consistency_examples"
     if not save_dir.exists():
         os.makedirs(save_dir)
-    autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs, checkpoint_interval=20)
+    autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs, checkpoint_interval=10)
     autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
 
     # Fitting explainers, computing the metric and saving everything
@@ -165,12 +164,15 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
                       NearestNeighbours(autoencoder, X_train, mse_loss)]
     results_list = []
     idx_subtrain = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
+    idx_subtest = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
     labels_subtrain = train_dataset.targets[idx_subtrain]
+    labels_subtest = test_dataset.targets[idx_subtrain]
     for explainer in explainer_list:
         logging.info(f"Now fitting {explainer} exaplainer")
-        attribution = explainer.attribute(X_test, idx_subtrain, recursion_depth=1000, learning_rate=autoencoder.lr)
+        attribution = explainer.attribute(X_test[idx_subtest], idx_subtrain, recursion_depth=100,
+                                          learning_rate=autoencoder.lr)
         autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
-        similarity_rates = similarity_rate(attribution, labels_subtrain, test_dataset.targets)
+        similarity_rates = similarity_rate(attribution, labels_subtrain, labels_subtest)
         results_list += [[str(explainer), metric] for metric in similarity_rates]
     results_df = pd.DataFrame(results_list, columns=["Explainer", "Similarity Rate"])
     results_df.to_csv(save_dir/"metrics.csv")

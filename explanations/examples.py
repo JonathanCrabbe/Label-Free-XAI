@@ -44,8 +44,8 @@ class InfluenceFunctions(ExampleBasedExplainer, ABC):
     def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
         super().__init__(model, X_train, loss_f)
 
-    def attribute(self, X_test: torch.Tensor, train_idx: list, batch_size: int = 300, damp: float = 1e-3,
-                  scale: float = 1000, recursion_depth: int = 1000, **kwargs) -> torch.Tensor:
+    def attribute(self, X_test: torch.Tensor, train_idx: list, batch_size: int = 1, damp: float = 1e-3,
+                  scale: float = 1000, recursion_depth: int = 100, **kwargs) -> torch.Tensor:
         """
         Code adapted from https://github.com/ahmedmalaa/torch-influence-functions/
         This function applies the stochastic estimation approach to evaluating influence function based on the power-series
@@ -74,7 +74,7 @@ class InfluenceFunctions(ExampleBasedExplainer, ABC):
                                        self.model(self.X_train[sampled_idx]))
             IHVP_prev = [IHVP_[k].detach().clone() for k in range(len(train_idx))]
             hvps_ = [stack_torch_tensors(hessian_vector_product(sampled_loss, self.model, [IHVP_prev[k]]))
-                     for k in range(len(train_idx))]
+                     for k in tqdm(range(len(train_idx)), unit="example", leave=False)]
             IHVP_ = [g_ + (1 - damp) * ihvp_ - hvp_ / scale for (g_, ihvp_, hvp_) in zip(grads, IHVP_prev, hvps_)]
 
         IHVP_ = [IHVP_[k] / (scale * NUM_SAMPLES) for k in range(len(train_idx))]  # Rescale Hessian-Vector products
