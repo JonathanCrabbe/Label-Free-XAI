@@ -168,11 +168,11 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
     labels_subtrain = train_dataset.targets[idx_subtrain]
     labels_subtest = test_dataset.targets[idx_subtrain]
     for explainer in explainer_list:
-        logging.info(f"Now fitting {explainer} exaplainer")
+        logging.info(f"Now fitting {explainer} explainer")
         attribution = explainer.attribute(X_test[idx_subtest], idx_subtrain, recursion_depth=100,
                                           learning_rate=autoencoder.lr)
         autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
-        similarity_rates = similarity_rate(attribution, labels_subtrain, labels_subtest)
+        similarity_rates = similarity_rate(attribution, labels_subtrain, labels_subtest, 10)
         results_list += [[str(explainer), metric] for metric in similarity_rates]
     results_df = pd.DataFrame(results_list, columns=["Explainer", "Similarity Rate"])
     results_df.to_csv(save_dir/"metrics.csv")
@@ -182,7 +182,7 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
 
 def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs: int = 5,
                              dim_latent: int = 4, n_epochs: int = 100, patience: int = 10,
-                             subtrain_size: int = 100, n_plots: int = 10) -> None:
+                             subtrain_size: int = 1000, n_plots: int = 10) -> None:
     # Initialize seed and device
     np.random.seed(random_seed)
     torch.random.manual_seed(random_seed)
@@ -242,7 +242,7 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
                                                                           gradshap, baseline_image), 0)))
             # Compute example importance
             logging.info("Computing example importance")
-            simplex = SimplEx(model.cpu(), X_train, mse_loss)
+            simplex = NearestNeighbours(model.cpu(), X_train, mse_loss)
             example_importance.append(np.expand_dims(simplex.attribute(X_test, idx_subtrain).cpu().numpy(), 0))
 
         # Create and fit a MNIST classifier
@@ -260,7 +260,7 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
                                                                       gradshap, baseline_image), 0)))
         # Compute example importance for the classifier
         logging.info("Computing example importance")
-        simplex = SimplEx(classifier.cpu(), X_train, mse_loss)
+        simplex = NearestNeighbours(classifier.cpu(), X_train, mse_loss)
         example_importance.append(np.expand_dims(simplex.attribute(X_test, idx_subtrain).cpu().numpy(), 0))
 
         # Compute correlation between the saliency of different pretext tasks

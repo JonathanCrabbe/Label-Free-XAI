@@ -135,7 +135,7 @@ class SimplEx(ExampleBasedExplainer, ABC):
 
     @staticmethod
     def compute_weights(batch_representations: torch.Tensor, train_representations: torch.Tensor,
-                        n_epoch: int = 10000) -> torch.Tensor:
+                        n_epoch: int = 1000) -> torch.Tensor:
         preweights = torch.zeros((len(batch_representations), len(train_representations)), requires_grad=True)
         optimizer = torch.optim.Adam([preweights])
         for epoch in range(n_epoch):
@@ -167,7 +167,7 @@ class NearestNeighbours(ExampleBasedExplainer, ABC):
         return attribution
 
     def __str__(self):
-        return "Nearest Neighbours"
+        return "DKNN"
 
 
 class InfluenceFunction:
