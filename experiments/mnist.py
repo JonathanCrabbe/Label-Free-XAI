@@ -21,7 +21,7 @@ from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, AutoEncod
 from models.losses import BetaHLoss, BtcvaeLoss
 from models.pretext import Identity, RandomNoise, Mask
 from utils.metrics import cos_saliency, entropy_saliency, similarity_rate, \
-    count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency, top_consistency
+    count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency, top_consistency, similarity_rates
 from utils.visualize import plot_vae_saliencies, vae_box_plots, correlation_latex_table, plot_pretext_saliencies,\
 plot_pretext_top_example
 
@@ -163,6 +163,7 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
                       SimplEx(autoencoder, X_train, mse_loss),
                       NearestNeighbours(autoencoder, X_train, mse_loss)]
     results_list = []
+    n_top_list = [1, 2, 5, 10, 20, 30, 40, 50, 100]
     idx_subtrain = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
     idx_subtest = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
     labels_subtrain = train_dataset.targets[idx_subtrain]
@@ -172,12 +173,15 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
         attribution = explainer.attribute(X_test[idx_subtest], idx_subtrain, recursion_depth=100,
                                           learning_rate=autoencoder.lr)
         autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
-        similarity_rates = similarity_rate(attribution, labels_subtrain, labels_subtest, 10)
-        results_list += [[str(explainer), metric] for metric in similarity_rates]
-    results_df = pd.DataFrame(results_list, columns=["Explainer", "Similarity Rate"])
+        sim_most, sim_least = similarity_rates(attribution, labels_subtrain, labels_subtest, n_top_list)
+        results_list += [[str(explainer), "Most Important", n_top_list[k], sim_most[k]] for k in range(len(n_top_list))]
+        results_list += [[str(explainer), "Least Important", n_top_list[k], sim_least[k]] for k in range(len(n_top_list))]
+    results_df = pd.DataFrame(results_list, columns=["Explainer", "Type of Examples", "Number of Examples Selected",
+                                                     "Similarity Rate"])
     results_df.to_csv(save_dir/"metrics.csv")
-    sns.boxplot(x="Explainer", y="Similarity Rate", data=results_df, palette="colorblind")
-    plt.savefig(save_dir/"box_plots.pdf")
+    sns.lineplot(data=results_df, x="Number of Examples Selected",
+                 y="Similarity Rate", hue="Explainer", style="Type of Examples", palette="colorblind")
+    plt.savefig(save_dir/"similarity_rates.pdf")
 
 
 def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs: int = 5,

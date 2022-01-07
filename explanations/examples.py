@@ -122,7 +122,7 @@ class SimplEx(ExampleBasedExplainer, ABC):
         super().__init__(model, X_train, loss_f)
 
     def attribute(self, X_test: torch.Tensor, train_idx: list, learning_rate: float = 1,
-                  batch_size: int = 500, **kwargs) -> torch.Tensor:
+                  batch_size: int = 50, **kwargs) -> torch.Tensor:
         attribution = torch.zeros(len(X_test), len(train_idx))
         train_representations = self.model.encoder(self.X_train[train_idx]).detach()
         n_batch = int(len(X_test)/batch_size)

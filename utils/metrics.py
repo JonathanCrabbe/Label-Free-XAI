@@ -64,6 +64,26 @@ def similarity_rate(example_importance: torch.Tensor, labels_subtrain: torch.Ten
     return similarity_rates
 
 
+def similarity_rates(example_importance: torch.Tensor, labels_subtrain: torch.Tensor, labels_test: torch.Tensor,
+                     n_top_list: list = [1, 2, 5, 10, 20, 30, 40, 50]) -> tuple:
+    test_size, subtrain_size = example_importance.shape
+    result_most = []
+    result_least = []
+    for n_top in n_top_list:
+        most_important_examples = torch.topk(example_importance, k=n_top)[1]
+        least_important_examples = torch.topk(example_importance, k=n_top, largest=False)[1]
+        similarities_most = []
+        similarities_least = []
+        for n in range(test_size):
+            most_important_labels = labels_subtrain[most_important_examples[n]]
+            least_important_labels = labels_subtrain[least_important_examples[n]]
+            similarities_most.append(torch.count_nonzero(most_important_labels == labels_test[n]).item() / n_top)
+            similarities_least.append(torch.count_nonzero(least_important_labels == labels_test[n]).item() / n_top)
+        result_most.append(np.mean(similarities_most))
+        result_least.append(np.mean(similarities_least))
+    return result_most, result_least
+
+
 def top_consistency(example_importances: torch.Tensor, num_top: int = 5) -> np.ndarray:
     n_tasks, n_test, n_train = example_importances.shape
     top_idx = torch.topk(torch.from_numpy(example_importances), num_top)[1]
