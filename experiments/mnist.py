@@ -246,8 +246,8 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
                                                                           gradshap, baseline_image), 0)))
             # Compute example importance
             logging.info("Computing example importance")
-            simplex = NearestNeighbours(model.cpu(), X_train, mse_loss)
-            example_importance.append(np.expand_dims(simplex.attribute(X_test, idx_subtrain).cpu().numpy(), 0))
+            dknn = NearestNeighbours(model.cpu(), X_train, mse_loss)
+            example_importance.append(np.expand_dims(dknn.attribute(X_test, idx_subtrain).cpu().numpy(), 0))
 
         # Create and fit a MNIST classifier
         name = f'Classifier_run{run}'
@@ -264,8 +264,8 @@ def pretext_task_sensitivity(random_seed: int = 1, batch_size: int = 300, n_runs
                                                                       gradshap, baseline_image), 0)))
         # Compute example importance for the classifier
         logging.info("Computing example importance")
-        simplex = NearestNeighbours(classifier.cpu(), X_train, mse_loss)
-        example_importance.append(np.expand_dims(simplex.attribute(X_test, idx_subtrain).cpu().numpy(), 0))
+        dknn = NearestNeighbours(classifier.cpu(), X_train, mse_loss)
+        example_importance.append(np.expand_dims(dknn.attribute(X_test, idx_subtrain).cpu().numpy(), 0))
 
         # Compute correlation between the saliency of different pretext tasks
         feature_importance = np.concatenate(feature_importance)
