@@ -2,13 +2,17 @@ import os
 import torch
 import logging
 import numpy as np
+import pandas as pd
 import seaborn as sns
+import argparse
 import matplotlib.pyplot as plt
 from pathlib import Path
 from utils.datasets import ECG5000
 from torch.utils.data import DataLoader, random_split
 from models.time_series import RecurrentAutoencoder
 from explanations.features import AuxiliaryFunction
+from explanations.examples import InfluenceFunctions, TracIn, SimplEx, NearestNeighbours
+from utils.metrics import similarity_rates
 from captum.attr import GradientShap, Saliency, IntegratedGradients, DeepLift
 
 
@@ -101,8 +105,75 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 50,
     plt.savefig(save_dir / "time_pert.pdf")
 
 
+def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, dim_latent: int = 64,
+                                   n_epochs: int = 150, subtrain_size: int = 100) -> None:
+    # Initialize seed and device
+    torch.random.manual_seed(random_seed)
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    data_dir = Path.cwd() / "data/ecg5000"
+    save_dir = Path.cwd() / "results/ecg5000/consistency_examples"
+    if not save_dir.exists():
+        os.makedirs(save_dir)
+
+    # Load dataset
+    train_dataset = ECG5000(data_dir, experiment="examples")
+    train_dataset, test_dataset = random_split(train_dataset, (4000, 1000))
+    train_loader = DataLoader(train_dataset, batch_size, True)
+    test_loader = DataLoader(test_dataset, batch_size, False)
+    X_train = torch.stack([train_dataset[k][0] for k in range(len(train_dataset))])
+    y_train = torch.tensor([train_dataset[k][1] for k in range(len(train_dataset))])
+    X_test = torch.stack([test_dataset[k][0] for k in range(len(test_dataset))])
+    y_test = torch.tensor([test_dataset[k][1] for k in range(len(test_dataset))])
+    time_steps = 140
+    n_features = 1
+
+    # Train the denoising autoencoder
+    autoencoder = RecurrentAutoencoder(time_steps, n_features, dim_latent)
+    save_dir = Path.cwd() / "results/ecg5000/consistency_examples"
+    if not save_dir.exists():
+        os.makedirs(save_dir)
+    autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs, checkpoint_interval=10)
+    autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
+
+    # Fitting explainers, computing the metric and saving everything
+    autoencoder.train().cpu()
+    l1_loss = torch.nn.L1Loss()
+    explainer_list = [InfluenceFunctions(autoencoder, X_train, l1_loss),
+                      TracIn(autoencoder, X_train, l1_loss),
+                      SimplEx(autoencoder, X_train, l1_loss),
+                      NearestNeighbours(autoencoder, X_train, l1_loss)]
+    results_list = []
+    n_top_list = [1, 2, 5, 10, 20, 30, 40, 50, 100]
+    idx_subtrain = [torch.nonzero(y_train == (n % 2))[n // 2].item() for n in range(subtrain_size)]
+    idx_subtest = [torch.nonzero(y_test == (n % 2))[n // 2].item() for n in range(subtrain_size)]
+    labels_subtrain = y_train[idx_subtrain]
+    labels_subtest = y_test[idx_subtest]
+    for explainer in explainer_list:
+        logging.info(f"Now fitting {explainer} explainer")
+        attribution = explainer.attribute(X_test[idx_subtest], idx_subtrain, recursion_depth=100,
+                                          learning_rate=autoencoder.lr)
+        autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
+        sim_most, sim_least = similarity_rates(attribution, labels_subtrain, labels_subtest, n_top_list)
+        results_list += [[str(explainer), "Most Important", n_top_list[k], sim_most[k]] for k in range(len(n_top_list))]
+        results_list += [[str(explainer), "Least Important", n_top_list[k], sim_least[k]] for k in range(len(n_top_list))]
+    results_df = pd.DataFrame(results_list, columns=["Explainer", "Type of Examples", "Number of Examples Selected",
+                                                     "Similarity Rate"])
+    results_df.to_csv(save_dir/"metrics.csv")
+    sns.lineplot(data=results_df, x="Number of Examples Selected",
+                 y="Similarity Rate", hue="Explainer", style="Type of Examples", palette="colorblind")
+    plt.savefig(save_dir/"similarity_rates.pdf")
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    consistency_feature_importance()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-e", type=str, default="consistency_features")
+    parser.add_argument("-b", type=int, default=50)
+    parser.add_argument("-r", type=int, default=42)
+    args = parser.parse_args()
+    if args.e == "consistency_features":
+        consistency_feature_importance(batch_size=args.b, random_seed=args.r)
+    elif args.e == "consistency_examples":
+        consistency_example_importance(batch_size=args.b, random_seed=args.r)
+    else:
+        raise ValueError("Invalid experiment name.")

@@ -190,10 +190,16 @@ class ECG5000(Dataset):
                 df = normal_df
             else:
                 df = anomaly_df
-            sequences = df.astype(np.float32).to_numpy().tolist()
-            sequences = [torch.tensor(sequence).unsqueeze(1).float() for sequence in sequences]
-            labels = [int(self.train) for _ in sequences]
+            labels = [int(self.train) for _ in range(len(df))]
 
+        elif experiment == "examples":
+            df = total_df.drop(labels='target', axis=1)
+            labels = [0 if int(label) == label_normal else 1 for label in total_df.target]
+        else:
+            raise ValueError("Invalid experiment name.")
+
+        sequences = df.astype(np.float32).to_numpy().tolist()
+        sequences = [torch.tensor(sequence).unsqueeze(1).float() for sequence in sequences]
         self.sequences = sequences
         self.labels = labels
         self.n_seq, self.seq_len, self.n_features = torch.stack(sequences).shape

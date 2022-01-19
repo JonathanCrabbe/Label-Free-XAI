@@ -398,9 +398,9 @@ if __name__ == "__main__":
         disvae_feature_importance(n_runs=args.n, batch_size=args.b, random_seed=args.r)
     elif args.e == "pretext":
         pretext_task_sensitivity(n_runs=args.n, batch_size=args.b, random_seed=args.r)
-    elif args.e == "consfeatures":
+    elif args.e == "consistency_features":
         consistency_feature_importance(batch_size=args.b, random_seed=args.r)
-    elif args.e == "consexamples":
+    elif args.e == "consistency_examples":
         consistency_examples(batch_size=args.b, random_seed=args.r)
     else:
         raise ValueError("Invalid experiment name")
