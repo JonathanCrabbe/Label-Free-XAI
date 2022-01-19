@@ -1,11 +1,15 @@
+import pathlib
 import subprocess
 import os
 import abc
+import wget
 import logging
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, datasets
+from zipfile import ZipFile
+from arff2pandas import a2p
 
 """
 This code is adapted from https://github.com/YannDubs/disentangling-vae/blob/master/utils/datasets.py
@@ -150,3 +154,61 @@ class DSprites(DisentangledDataset):
 
         lat_value = self.lat_values[idx]
         return sample, lat_value
+
+
+class ECG5000(Dataset):
+    def __init__(self, dir: pathlib.Path, train: bool = True, random_seed: int = 42,
+                 experiment: str = "features"):
+        if experiment not in ["features", "examples"]:
+            raise ValueError("The experiment name is either features or examples.")
+        self.dir = dir
+        self.train = train
+        self.random_seed = random_seed
+        if not dir.exists():
+            self.logger.info("Downloading ECG5000 Dataset.")
+            self.download()
+            self.logger.info("Finished Downloading.")
+
+        # Load the data and create a train/test set with split
+        with open(self.dir / "ECG5000_TRAIN.arff") as f:
+            total_df = a2p.load(f)
+        with open(self.dir / "ECG5000_TEST.arff") as f:
+            total_df = total_df.append(a2p.load(f))
+
+        # Isolate the target column in the dataset
+        label_normal = 1
+        new_columns = list(total_df.columns)
+        new_columns[-1] = 'target'
+        total_df.columns = new_columns
+
+        # Split the dataset in normal and abnormal examples
+        normal_df = total_df[total_df.target == str(label_normal)].drop(labels='target', axis=1)
+        anomaly_df = total_df[total_df.target != str(label_normal)].drop(labels='target', axis=1)
+
+        if experiment == "features":
+            if self.train:
+                df = normal_df
+            else:
+                df = anomaly_df
+            sequences = df.astype(np.float32).to_numpy().tolist()
+            sequences = [torch.tensor(sequence).unsqueeze(1).float() for sequence in sequences]
+            labels = [int(self.train) for _ in sequences]
+
+        self.sequences = sequences
+        self.labels = labels
+        self.n_seq, self.seq_len, self.n_features = torch.stack(sequences).shape
+
+    def __len__(self):
+        return self.n_seq
+
+    def __getitem__(self, idx):
+        return self.sequences[idx], self.labels[idx]
+
+    def download(self):
+        """Download the dataset. """
+        url = 'http://timeseriesclassification.com/Downloads/ECG5000.zip'
+        logging.info("Downloading the ECG5000 Dataset.")
+        data_zip = self.dir / "ECG5000.zip"
+        wget.download(url, str(data_zip))
+        with ZipFile(data_zip, 'r') as zip_ref:
+            zip_ref.extractall(self.dir)
