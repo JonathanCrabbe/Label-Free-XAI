@@ -165,6 +165,7 @@ class ECG5000(Dataset):
         self.train = train
         self.random_seed = random_seed
         if not dir.exists():
+            os.makedirs(dir)
             self.download()
 
         # Load the data and create a train/test set with split
