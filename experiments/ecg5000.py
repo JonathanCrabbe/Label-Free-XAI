@@ -105,8 +105,8 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 50,
     plt.savefig(save_dir / "time_pert.pdf")
 
 
-def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, dim_latent: int = 64,
-                                   n_epochs: int = 150, subtrain_size: int = 100) -> None:
+def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, dim_latent: int = 32,
+                                   n_epochs: int = 150, subtrain_size: int = 200) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
