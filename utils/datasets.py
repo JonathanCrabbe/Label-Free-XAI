@@ -165,9 +165,7 @@ class ECG5000(Dataset):
         self.train = train
         self.random_seed = random_seed
         if not dir.exists():
-            self.logger.info("Downloading ECG5000 Dataset.")
             self.download()
-            self.logger.info("Finished Downloading.")
 
         # Load the data and create a train/test set with split
         with open(self.dir / "ECG5000_TRAIN.arff") as f:
@@ -218,3 +216,4 @@ class ECG5000(Dataset):
         wget.download(url, str(data_zip))
         with ZipFile(data_zip, 'r') as zip_ref:
             zip_ref.extractall(self.dir)
+        logging.info("Finished Downloading.")
