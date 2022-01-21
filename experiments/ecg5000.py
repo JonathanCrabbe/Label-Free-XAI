@@ -105,7 +105,7 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 50,
     plt.savefig(save_dir / "time_pert.pdf")
 
 
-def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, dim_latent: int = 32,
+def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, dim_latent: int = 16,
                                    n_epochs: int = 150, subtrain_size: int = 200) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
@@ -170,10 +170,13 @@ if __name__ == "__main__":
     parser.add_argument("-e", type=str, default="consistency_features")
     parser.add_argument("-b", type=int, default=50)
     parser.add_argument("-r", type=int, default=42)
+    parser.add_argument("-d", type=int, default=64)
+    parser.add_argument("-subset_size", type=int, default=200)
     args = parser.parse_args()
     if args.e == "consistency_features":
-        consistency_feature_importance(batch_size=args.b, random_seed=args.r)
+        consistency_feature_importance(batch_size=args.b, random_seed=args.r, dim_latent=args.d)
     elif args.e == "consistency_examples":
-        consistency_example_importance(batch_size=args.b, random_seed=args.r)
+        consistency_example_importance(batch_size=args.b, random_seed=args.r, dim_latent=args.d,
+                                       subtrain_size=args.subset_size)
     else:
         raise ValueError("Invalid experiment name.")
