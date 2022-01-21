@@ -105,8 +105,8 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 50,
     plt.savefig(save_dir / "time_pert.pdf")
 
 
-def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, dim_latent: int = 16,
-                                   n_epochs: int = 150, subtrain_size: int = 200) -> None:
+def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, dim_latent: int = 16,n_epochs: int = 150,
+                                   subtrain_size: int = 200, checkpoint_interval: int = 10) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -132,7 +132,7 @@ def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, d
     save_dir = Path.cwd() / "results/ecg5000/consistency_examples"
     if not save_dir.exists():
         os.makedirs(save_dir)
-    autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs, checkpoint_interval=10)
+    autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs, checkpoint_interval=checkpoint_interval)
     autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
 
     # Fitting explainers, computing the metric and saving everything
@@ -171,12 +171,13 @@ if __name__ == "__main__":
     parser.add_argument("-b", type=int, default=50)
     parser.add_argument("-r", type=int, default=42)
     parser.add_argument("-d", type=int, default=64)
+    parser.add_argument("-checkpoint_interval", type=int, default=10)
     parser.add_argument("-subset_size", type=int, default=200)
     args = parser.parse_args()
     if args.e == "consistency_features":
         consistency_feature_importance(batch_size=args.b, random_seed=args.r, dim_latent=args.d)
     elif args.e == "consistency_examples":
         consistency_example_importance(batch_size=args.b, random_seed=args.r, dim_latent=args.d,
-                                       subtrain_size=args.subset_size)
+                                       subtrain_size=args.subset_size, checkpoint_interval=args.checkpoint_interval)
     else:
         raise ValueError("Invalid experiment name.")
