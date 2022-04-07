@@ -8,11 +8,13 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, datasets
+from torchvision.datasets import MNIST
 from zipfile import ZipFile
 from arff2pandas import a2p
+import matplotlib.pyplot as plt
 
 """
-This code is adapted from https://github.com/YannDubs/disentangling-vae/blob/master/utils/datasets.py
+The code for DSprites is adapted from https://github.com/YannDubs/disentangling-vae/blob/master/utils/datasets.py
 """
 
 
@@ -218,3 +220,16 @@ class ECG5000(Dataset):
         with ZipFile(data_zip, 'r') as zip_ref:
             zip_ref.extractall(self.dir)
         logging.info("Finished Downloading.")
+
+
+class MaskedMNIST(MNIST):
+    def __init__(self, root: str, train: bool = True, masks: torch.Tensor = None,):
+        super().__init__(root, train=train, download=True)
+        self.masks = masks
+
+    def __getitem__(self, index: int):
+        image, target = super().__getitem__(index)
+        image = self.masks[index]*image
+        return image, target
+
+

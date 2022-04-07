@@ -13,7 +13,7 @@ import csv
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
-from scipy.stats import  spearmanr
+from scipy.stats import spearmanr
 from explanations.features import AuxiliaryFunction, attribute_auxiliary, attribute_individual_dim
 from explanations.examples import InfluenceFunctions, TracIn, SimplEx, NearestNeighbours
 from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, AutoEncoderMnist, VAE, EncoderBurgess, \
@@ -24,6 +24,8 @@ from utils.metrics import cos_saliency, entropy_saliency, similarity_rate, \
     count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency, top_consistency, similarity_rates
 from utils.visualize import plot_vae_saliencies, vae_box_plots, correlation_latex_table, plot_pretext_saliencies,\
 plot_pretext_top_example
+from utils.datasets import MaskedMNIST
+from utils.feature_attribution import generate_masks
 
 
 def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
@@ -386,6 +388,89 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 300, n_plo
     plt.close(fig)
 
 
+def roar_test(random_seed: int = 1, batch_size: int = 200, dim_latent: int = 4, n_epochs: int = 100) -> None:
+    # Initialize seed and device
+    logging.info(f"Welcome in the ROAR test experiments")
+    torch.random.manual_seed(random_seed)
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    remove_percentages = [10, 20, 50, 70, 100]
+
+    # Load MNIST
+    W = 28  # Image width = height
+    data_dir = Path.cwd() / "data/mnist"
+    train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
+    test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
+    train_transform = transforms.Compose([transforms.ToTensor()])
+    test_transform = transforms.Compose([transforms.ToTensor()])
+    train_dataset.transform = train_transform
+    test_dataset.transform = test_transform
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    save_dir = Path.cwd() / "results/mnist/roar_test"
+    if not save_dir.exists():
+        os.makedirs(save_dir)
+
+    # Initialize encoder, decoder and autoencoder wrapper
+    pert = Identity()
+    encoder = EncoderMnist(encoded_space_dim=dim_latent)
+    decoder = DecoderMnist(encoded_space_dim=dim_latent)
+    autoencoder = AutoEncoderMnist(encoder, decoder, dim_latent, pert, name="model_initial")
+    autoencoder.save(save_dir)
+    encoder.to(device)
+    decoder.to(device)
+
+    # Train the denoising autoencoder
+    logging.info("Training the initial autoencoder")
+    autoencoder = AutoEncoderMnist(encoder, decoder, dim_latent, pert, name="model")
+    autoencoder.load_state_dict(torch.load(save_dir / "model_initial.pt"), strict=False)
+    autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs)
+    autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
+    original_test_performance = autoencoder.test_epoch(device, test_loader)
+
+    # Create dictionaries to store feature importance and shift induced by perturbations
+    explainer_dic = {'Gradient Shap': GradientShap(encoder),
+                     'Integrated Gradients': IntegratedGradients(encoder),
+                     'Random': None
+                     }
+    baseline_features = torch.zeros((1, 1, W, W)).to(device)  # Baseline image for attributions
+    results_data = []
+
+    for explainer_name in explainer_dic:
+        logging.info(f"Computing feature importance with {explainer_name}")
+        results_data.append([explainer_name, 0, original_test_performance])
+        if explainer_dic[explainer_name] is not None:
+            attr = attribute_auxiliary(encoder, train_loader, device, explainer_dic[explainer_name], baseline_features)
+        else:  #Random attribution
+            attr = np.random.randn(len(train_dataset), 1, W, W)
+        for remove_percentage in remove_percentages:
+            mask_size = int(remove_percentage*(W**2) / 100)
+            torch.random.manual_seed(random_seed)
+            logging.info(f"Retraining an autoencoder with {remove_percentage}% pixels masked by {explainer_name}")
+            masks = generate_masks(attr, mask_size)
+            masked_train_set = MaskedMNIST(data_dir, True, masks)
+            masked_train_set.transform = train_transform
+            masked_train_loader = DataLoader(masked_train_set, batch_size=batch_size, shuffle=True)
+            encoder = EncoderMnist(encoded_space_dim=dim_latent)
+            decoder = DecoderMnist(encoded_space_dim=dim_latent)
+            autoencoder_name = f"model_{explainer_name}_mask{mask_size}"
+            autoencoder = AutoEncoderMnist(encoder, decoder, dim_latent, pert, name=autoencoder_name)
+            autoencoder.load_state_dict(torch.load(save_dir / "model_initial.pt"), strict=False)
+            encoder.to(device)
+            decoder.to(device)
+            autoencoder.fit(device, masked_train_loader, test_loader, save_dir, n_epochs)
+            autoencoder.load_state_dict(torch.load(save_dir / (autoencoder_name + ".pt")), strict=False)
+            test_performance = autoencoder.test_epoch(device, test_loader)
+            results_data.append([explainer_name, remove_percentage, test_performance])
+
+    logging.info(f"Saving the plot in {str(save_dir)}")
+    results_df = pd.DataFrame(results_data, columns=["Method", "% of features removed", "Test Loss"])
+    sns.set_style("white")
+    sns.set_palette("colorblind")
+    sns.lineplot(data=results_df, x="% of features removed", y="Test Loss", hue="Method")
+    plt.savefig(save_dir / "roar.pdf")
+    plt.close()
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     parser = argparse.ArgumentParser()
@@ -402,6 +487,8 @@ if __name__ == "__main__":
         consistency_feature_importance(batch_size=args.b, random_seed=args.r)
     elif args.e == "consistency_examples":
         consistency_examples(batch_size=args.b, random_seed=args.r)
+    elif args.e == "roar_test":
+        roar_test(batch_size=args.b, random_seed=args.r, n_epochs=10)
     else:
         raise ValueError("Invalid experiment name")
 
