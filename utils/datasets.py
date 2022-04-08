@@ -8,10 +8,10 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, datasets
-from torchvision.datasets import MNIST
+from torchvision.datasets import MNIST, CIFAR10
 from zipfile import ZipFile
 from arff2pandas import a2p
-import matplotlib.pyplot as plt
+from PIL import Image
 
 """
 The code for DSprites is adapted from https://github.com/YannDubs/disentangling-vae/blob/master/utils/datasets.py
@@ -231,5 +231,14 @@ class MaskedMNIST(MNIST):
         image, target = super().__getitem__(index)
         image = self.masks[index]*image
         return image, target
+
+
+class CIFAR10Pair(CIFAR10):
+    """Generate mini-batche pairs on CIFAR10 training set."""
+    def __getitem__(self, idx):
+        img, target = self.data[idx], self.targets[idx]
+        img = Image.fromarray(img)  # .convert('RGB')
+        imgs = [self.transform(img), self.transform(img)]
+        return torch.stack(imgs), target  # stack a positive pair
 
 

@@ -142,4 +142,5 @@ cython_debug/
 data/*
 experiments/results/*
 results/*
+outputs/*
 
