@@ -936,9 +936,7 @@ class SimCLR(nn.Module):
         color_distort = transforms.Compose([rnd_color_jitter, rnd_gray])
         return color_distort
 
-    def fit(self, args: DictConfig) -> None:
-        assert torch.cuda.is_available()
-        cudnn.benchmark = True
+    def fit(self, args: DictConfig, device: torch.device) -> None:
         logger = logging.getLogger(__name__)
 
         train_transform = transforms.Compose([transforms.RandomResizedCrop(32),
@@ -980,15 +978,13 @@ class SimCLR(nn.Module):
             train_bar = tqdm(train_loader)
             for x, y in train_bar:
                 sizes = x.size()
-                x = x.view(sizes[0] * 2, sizes[2], sizes[3], sizes[4]).cuda(non_blocking=True)
-
+                x = x.view(sizes[0] * 2, sizes[2], sizes[3], sizes[4]).to(device)
                 optimizer.zero_grad()
                 feature, rep = self.forward(x)
                 loss = self.nt_xent(rep, args.temperature)
                 loss.backward()
                 optimizer.step()
                 scheduler.step()
-
                 loss_meter.update(loss.item(), x.size(0))
                 train_bar.set_description("Train epoch {}, SimCLR loss: {:.4f}".format(epoch, loss_meter.avg))
 
