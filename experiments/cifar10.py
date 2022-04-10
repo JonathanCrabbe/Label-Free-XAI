@@ -23,7 +23,7 @@ from tqdm import tqdm
 @hydra.main(config_name='simclr_config.yaml', config_path=str(Path.cwd()/'models'))
 def consistency_feature_importance(args: DictConfig):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    pert_percentages = [5, 20, 50, 70, 100]
+    pert_percentages = [5, 10, 20, 50, 70, 80, 90, 100]
     perturbation = GaussianBlur(3, sigma=1).to(device)
 
     # Prepare model
@@ -33,8 +33,8 @@ def consistency_feature_importance(args: DictConfig):
     model = SimCLR(base_encoder, projection_dim=args.projection_dim).to(device)
     logging.info(f'Base model: {args.backbone} - feature dim: {model.feature_dim} - projection dim {args.projection_dim}')
     logging.info('Fitting SimCLR model')
-    model.fit(args, device)
-
+    #model.fit(args, device)
+    model.load_state_dict(torch.load("simclr_resnet18_epoch100.pt"), strict=False)
     # Compute feature importance
     W = 32
     test_batch_size = int(args.batch_size/20)
@@ -71,9 +71,11 @@ def consistency_feature_importance(args: DictConfig):
 
     logging.info(f"Saving the plot")
     results_df = pd.DataFrame(results_data, columns=["Method", "% of features perturbed", "Representation Shift"])
+    sns.set(font_scale=1.3)
     sns.set_style("white")
     sns.set_palette("colorblind")
     sns.lineplot(data=results_df, x="% of features perturbed", y="Representation Shift", hue="Method")
+    plt.tight_layout()
     plt.savefig("cifar10_consistency_features.pdf")
     plt.close()
 

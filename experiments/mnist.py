@@ -464,9 +464,11 @@ def roar_test(random_seed: int = 1, batch_size: int = 200, dim_latent: int = 4, 
 
     logging.info(f"Saving the plot in {str(save_dir)}")
     results_df = pd.DataFrame(results_data, columns=["Method", "% of features removed", "Test Loss"])
+    sns.set(font_scale=1.3)
     sns.set_style("white")
     sns.set_palette("colorblind")
     sns.lineplot(data=results_df, x="% of features removed", y="Test Loss", hue="Method")
+    plt.tight_layout()
     plt.savefig(save_dir / "roar.pdf")
     plt.close()
 
