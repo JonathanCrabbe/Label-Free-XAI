@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from captum.attr import Attribution
+from captum.attr import Attribution, Saliency
 from torch.nn import Module
 
 
@@ -63,11 +63,14 @@ def attribute_auxiliary(encoder: Module, data_loader: torch.utils.data.DataLoade
         inputs = inputs.to(device)
         auxiliary_encoder = AuxiliaryFunction(encoder, inputs)
         attr_method.forward_func = auxiliary_encoder
-        if isinstance(baseline, torch.Tensor):
-            attributions.append(attr_method.attribute(inputs, baseline).detach().cpu().numpy())
-        elif isinstance(baseline, Module):
-            baseline_inputs = baseline(inputs)
-            attributions.append(attr_method.attribute(inputs, baseline_inputs).detach().cpu().numpy())
-        else:
+        if isinstance(attr_method, Saliency):
             attributions.append(attr_method.attribute(inputs).detach().cpu().numpy())
+        else:
+            if isinstance(baseline, torch.Tensor):
+                attributions.append(attr_method.attribute(inputs, baseline).detach().cpu().numpy())
+            elif isinstance(baseline, Module):
+                baseline_inputs = baseline(inputs)
+                attributions.append(attr_method.attribute(inputs, baseline_inputs).detach().cpu().numpy())
+            else:
+                attributions.append(attr_method.attribute(inputs).detach().cpu().numpy())
     return np.concatenate(attributions)

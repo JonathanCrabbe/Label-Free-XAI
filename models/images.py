@@ -991,7 +991,7 @@ class SimCLR(nn.Module):
             # save checkpoint very log_interval epochs
             if epoch >= args.log_interval and epoch % args.log_interval == 0:
                 logger.info("==> Save checkpoint. Train epoch {}, SimCLR loss: {:.4f}".format(epoch, loss_meter.avg))
-                torch.save(self.state_dict(), f'simclr_{args.backbone}_epoch{epoch}.pt')
+                torch.save(self.state_dict(), Path.cwd()/f'models/simclr_{args.backbone}_epoch{epoch}.pt')
 
 
 def log_density_gaussian(x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor):

@@ -1,5 +1,5 @@
+import argparse
 import os
-
 import pandas as pd
 import torch
 import hydra
@@ -16,25 +16,43 @@ from torchvision.transforms import ToTensor, GaussianBlur
 from torch.utils.data import DataLoader
 from explanations.features import attribute_auxiliary
 from utils.feature_attribution import generate_masks
-from captum.attr import GradientShap, IntegratedGradients
-from tqdm import tqdm
+from captum.attr import GradientShap, IntegratedGradients, DeepLift, Saliency
+from hydra import compose, initialize
 
 
-@hydra.main(config_name='simclr_config.yaml', config_path=str(Path.cwd()/'models'))
-def consistency_feature_importance(args: DictConfig):
+def fit_model(args: DictConfig):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    pert_percentages = [5, 10, 20, 50, 70, 80, 90, 100]
-    perturbation = GaussianBlur(3, sigma=1).to(device)
-
     # Prepare model
     torch.manual_seed(args.seed)
     assert args.backbone in ['resnet18', 'resnet34']
     base_encoder = eval(args.backbone)
     model = SimCLR(base_encoder, projection_dim=args.projection_dim).to(device)
-    logging.info(f'Base model: {args.backbone} - feature dim: {model.feature_dim} - projection dim {args.projection_dim}')
     logging.info('Fitting SimCLR model')
-    #model.fit(args, device)
-    model.load_state_dict(torch.load("simclr_resnet18_epoch100.pt"), strict=False)
+    model.fit(args, device)
+
+
+@hydra.main(config_name='simclr_config.yaml', config_path=str(Path.cwd()/'models'))
+def consistency_feature_importance(args: DictConfig):
+    torch.manual_seed(args.seed)
+    model_path = Path.cwd() / f"models/simclr_{args.backbone}_epoch{args.epochs}.pt"
+    # Fit a model if it does not exist yet
+    if not model_path.exists():
+        if not (Path.cwd() / "models").exists():
+            os.makedirs(Path.cwd() / "models")
+        fit_model(args)
+
+    # Prepare the model
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    pert_percentages = [5, 10, 20, 50, 80, 100]
+    perturbation = GaussianBlur(21, sigma=5).to(device)
+
+    assert args.backbone in ['resnet18', 'resnet34']
+    base_encoder = eval(args.backbone)
+    model = SimCLR(base_encoder, projection_dim=args.projection_dim).to(device)
+    logging.info(f'Base model: {args.backbone} - feature dim: {model.feature_dim} - projection dim {args.projection_dim}')
+
+
+    model.load_state_dict(torch.load(model_path), strict=False)
     # Compute feature importance
     W = 32
     test_batch_size = int(args.batch_size/20)
@@ -44,6 +62,7 @@ def consistency_feature_importance(args: DictConfig):
     test_loader = DataLoader(test_set, test_batch_size)
     attr_methods = {"Gradient Shap": GradientShap,
                     "Integrated Gradients": IntegratedGradients,
+                    "Saliency": Saliency,
                     "Random": None}
     results_data = []
     for method_name in attr_methods:
@@ -51,7 +70,7 @@ def consistency_feature_importance(args: DictConfig):
         results_data.append([method_name, 0, 0])
         attr_method = attr_methods[method_name]
         if attr_method is not None:
-            attr = attribute_auxiliary(encoder, test_loader, device, GradientShap(encoder), perturbation)
+            attr = attribute_auxiliary(encoder, test_loader, device, attr_method(encoder), perturbation)
         else:
             np.random.seed(args.seed)
             attr = np.random.randn(len(test_set), 1, W, W)
@@ -76,9 +95,18 @@ def consistency_feature_importance(args: DictConfig):
     sns.set_palette("colorblind")
     sns.lineplot(data=results_df, x="% of features perturbed", y="Representation Shift", hue="Method")
     plt.tight_layout()
-    plt.savefig("cifar10_consistency_features.pdf")
+    plt.savefig(Path.cwd()/"consistency_features/cifar10_consistency_features.pdf")
     plt.close()
 
 
 if __name__ == '__main__':
-    consistency_feature_importance()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--name", type=str, default="consistency_features")
+    arguments = parser.parse_args()
+
+    if arguments.name == "consistency_features":
+        consistency_feature_importance()
+    elif arguments.name == "consistency_examples":
+        print("coucou")
+    else:
+        raise ValueError("Invalid experiment name")
