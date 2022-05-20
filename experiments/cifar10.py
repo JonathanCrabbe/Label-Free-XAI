@@ -13,9 +13,11 @@ from pathlib import Path
 from torchvision.models import resnet18, resnet34
 from torchvision.datasets import CIFAR10
 from torchvision.transforms import ToTensor, GaussianBlur
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from explanations.features import attribute_auxiliary
+from explanations.examples import SimplEx, NearestNeighbours
 from utils.feature_attribution import generate_masks
+from utils.metrics import similarity_rates
 from captum.attr import GradientShap, IntegratedGradients, DeepLift, Saliency
 from hydra import compose, initialize
 
@@ -31,9 +33,11 @@ def fit_model(args: DictConfig):
     model.fit(args, device)
 
 
-@hydra.main(config_name='simclr_config.yaml', config_path=str(Path.cwd()/'models'))
 def consistency_feature_importance(args: DictConfig):
     torch.manual_seed(args.seed)
+    save_dir = Path.cwd() / "consistency_features"
+    if not save_dir.exists():
+        os.makedirs(save_dir)
     model_path = Path.cwd() / f"models/simclr_{args.backbone}_epoch{args.epochs}.pt"
     # Fit a model if it does not exist yet
     if not model_path.exists():
@@ -50,13 +54,12 @@ def consistency_feature_importance(args: DictConfig):
     base_encoder = eval(args.backbone)
     model = SimCLR(base_encoder, projection_dim=args.projection_dim).to(device)
     logging.info(f'Base model: {args.backbone} - feature dim: {model.feature_dim} - projection dim {args.projection_dim}')
-
-
     model.load_state_dict(torch.load(model_path), strict=False)
+
     # Compute feature importance
     W = 32
     test_batch_size = int(args.batch_size/20)
-    encoder = model.enc
+    encoder = model.encoder
     data_dir = hydra.utils.to_absolute_path(args.data_dir)
     test_set = CIFAR10(data_dir, False, transform=ToTensor())
     test_loader = DataLoader(test_set, test_batch_size)
@@ -89,24 +92,81 @@ def consistency_feature_importance(args: DictConfig):
                 results_data.append([method_name, pert_percentage, rep_shift])
 
     logging.info(f"Saving the plot")
-    results_df = pd.DataFrame(results_data, columns=["Method", "% of features perturbed", "Representation Shift"])
+    results_df = pd.DataFrame(results_data, columns=["Method", "% Perturbed Pixels", "Representation Shift"])
     sns.set(font_scale=1.3)
     sns.set_style("white")
     sns.set_palette("colorblind")
-    sns.lineplot(data=results_df, x="% of features perturbed", y="Representation Shift", hue="Method")
+    sns.lineplot(data=results_df, x="% Perturbed Pixels", y="Representation Shift", hue="Method")
     plt.tight_layout()
-    plt.savefig(Path.cwd()/"consistency_features/cifar10_consistency_features.pdf")
+    plt.savefig(save_dir/"cifar10_consistency_features.pdf")
     plt.close()
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--name", type=str, default="consistency_features")
-    arguments = parser.parse_args()
+def consistency_example_importance(args: DictConfig):
+    torch.manual_seed(args.seed)
+    save_dir = Path.cwd() / "consistency_examples"
+    if not save_dir.exists():
+        os.makedirs(save_dir)
+    model_path = Path.cwd() / f"models/simclr_{args.backbone}_epoch{args.epochs}.pt"
+    # Fit a model if it does not exist yet
 
-    if arguments.name == "consistency_features":
-        consistency_feature_importance()
-    elif arguments.name == "consistency_examples":
-        print("coucou")
+    if not model_path.exists():
+        if not (Path.cwd() / "models").exists():
+            os.makedirs(Path.cwd() / "models")
+        fit_model(args)
+
+    # Prepare the model
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    assert args.backbone in ['resnet18', 'resnet34']
+    base_encoder = eval(args.backbone)
+    model = SimCLR(base_encoder, projection_dim=args.projection_dim).to(device)
+    logging.info(f'Base model: {args.backbone} - feature dim: {model.feature_dim} - projection dim {args.projection_dim}')
+    model.load_state_dict(torch.load(model_path), strict=False)
+
+    # Compute feature importance
+    W = 32
+    test_batch_size = int(args.batch_size/20)
+    encoder = model.encoder
+    data_dir = hydra.utils.to_absolute_path(args.data_dir)
+    train_set = CIFAR10(data_dir, False, transform=ToTensor())
+    train_indices = torch.randperm(len(train_set))[:1000]
+    train_subset = Subset(train_set, train_indices)
+    train_loader = DataLoader(train_subset, test_batch_size)
+    labels_subtrain = torch.cat([labels for _, labels in train_loader])
+    test_set = CIFAR10(data_dir, False, transform=ToTensor())
+    test_indices = torch.randperm(len(test_set))[:1000]
+    test_subset = Subset(test_set, test_indices)
+    test_loader = DataLoader(test_subset, test_batch_size)
+    labels_subtest = torch.cat([labels for _, labels in test_loader])
+    attr_methods = {"SimplEx": SimplEx(model),
+                    "DKNN": NearestNeighbours(model)}
+    results_data = []
+    frac_list = [0.05, 0.1, 0.2, 0.5, 0.7, 1.0]
+    n_top_list = [int(frac*len(train_subset)) for frac in frac_list]
+    for method_name in attr_methods:
+        logging.info(f'Computing feature importance with {method_name}')
+        attr = attr_methods[method_name].attribute_loader(device=device, train_loader=train_loader, test_loader=test_loader)
+        sim_most, sim_least = similarity_rates(attr, labels_subtrain, labels_subtest, n_top_list)
+        results_data += [[method_name, "Most Important", 100*frac, sim] for frac, sim in zip(frac_list, sim_most)]
+        results_data += [[method_name, "Least Important", 100*frac, sim] for frac, sim in zip(frac_list, sim_least)]
+    results_df = pd.DataFrame(results_data, columns=["Explainer", "Type of Examples", "% Examples Selected",
+                                                     "Similarity Rate"])
+    results_df.to_csv(save_dir / "metrics.csv")
+    sns.lineplot(data=results_df, x="% Examples Selected",
+                 y="Similarity Rate", hue="Explainer", style="Type of Examples", palette="colorblind")
+    plt.savefig(save_dir / "similarity_rates.pdf")
+
+
+@hydra.main(config_name='simclr_config.yaml', config_path=str(Path.cwd()))
+def main(args: DictConfig):
+    if args.experiment_name == "consistency_features":
+        consistency_feature_importance(args)
+    elif args.experiment_name == "consistency_examples":
+        consistency_example_importance(args)
     else:
         raise ValueError("Invalid experiment name")
+
+
+if __name__ == '__main__':
+    main()
+

@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from abc import ABC
 
 
+
 class ExampleBasedExplainer(ABC):
     def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable, **kwargs):
         self.model = model
@@ -118,7 +119,7 @@ class TracIn(ExampleBasedExplainer, ABC):
 
 
 class SimplEx(ExampleBasedExplainer, ABC):
-    def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
+    def __init__(self, model: nn.Module, X_train: torch.Tensor = None, loss_f: callable = None):
         super().__init__(model, X_train, loss_f)
 
     def attribute(self, X_test: torch.Tensor, train_idx: list, learning_rate: float = 1,
@@ -131,6 +132,23 @@ class SimplEx(ExampleBasedExplainer, ABC):
             batch_representations = self.model.encoder(batch_features).detach()
             attribution[n*batch_size:(n+1)*batch_size] = self.compute_weights(batch_representations,
                                                                               train_representations)
+        return attribution
+
+    def attribute_loader(self, device: torch.device, train_loader: DataLoader, test_loader: DataLoader,
+                         batch_size: int = 50) -> torch.Tensor:
+        H_train = []
+        for x_train, _ in train_loader:
+            H_train.append(self.model.encoder(x_train.to(device)).detach().cpu())
+        H_train = torch.cat(H_train)
+        H_test = []
+        for x_test, _ in test_loader:
+            H_test.append(self.model.encoder(x_test.to(device)).detach().cpu())
+        H_test = torch.cat(H_test)
+        attribution = torch.zeros(len(H_test), len(H_train))
+        n_batch = int(len(H_test) / batch_size)
+        for n in tqdm(range(n_batch), unit="batch", leave=False):
+            h_test = H_test[n*batch_size:(n+1)*batch_size]
+            attribution[n*batch_size:(n+1)*batch_size] = self.compute_weights(h_test, H_train)
         return attribution
 
     @staticmethod
@@ -152,7 +170,7 @@ class SimplEx(ExampleBasedExplainer, ABC):
 
 
 class NearestNeighbours(ExampleBasedExplainer, ABC):
-    def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
+    def __init__(self, model: nn.Module, X_train: torch.Tensor = None, loss_f: callable = None):
         super().__init__(model, X_train, loss_f)
 
     def attribute(self, X_test: torch.Tensor, train_idx: list, batch_size: int = 500, **kwargs) -> torch.Tensor:
@@ -164,6 +182,24 @@ class NearestNeighbours(ExampleBasedExplainer, ABC):
             batch_representations = self.model.encoder(batch_features).detach().unsqueeze(1)
             attribution[n*batch_size:(n+1)*batch_size] =\
                 1/torch.sum((batch_representations-train_representations)**2, dim=-1)
+        return attribution
+
+    def attribute_loader(self, device: torch.device, train_loader: DataLoader, test_loader: DataLoader,
+                         batch_size: int = 50) -> torch.Tensor:
+        H_train = []
+        for x_train, _ in train_loader:
+            H_train.append(self.model.encoder(x_train.to(device)).detach().cpu())
+        H_train = torch.cat(H_train)
+        H_test = []
+        for x_test, _ in test_loader:
+            H_test.append(self.model.encoder(x_test.to(device)).detach().cpu())
+        H_test = torch.cat(H_test)
+        attribution = torch.zeros(len(H_test), len(H_train))
+        n_batch = int(len(H_test) / batch_size)
+        for n in tqdm(range(n_batch), unit="batch", leave=False):
+            h_test = H_test[n*batch_size:(n+1)*batch_size]
+            attribution[n*batch_size:(n+1)*batch_size] = \
+                1/torch.sum((h_test.unsqueeze(1) - H_train.unsqueeze(0))**2, dim=-1)
         return attribution
 
     def __str__(self):

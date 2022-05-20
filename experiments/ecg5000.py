@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from utils.datasets import ECG5000
 from torch.utils.data import DataLoader, random_split
-from models.time_series import RecurrentAutoencoder
+from models.time_series import RecurrentAutoencoder, AutoencoderCNN
 from explanations.features import AuxiliaryFunction
 from explanations.examples import InfluenceFunctions, TracIn, SimplEx, NearestNeighbours
 from utils.metrics import similarity_rates
@@ -47,7 +47,8 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 50,
     autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
 
     # Create dictionaries to store feature importance and shift induced by perturbations
-    n_time_steps_pert = [1, 2, 5, 10, 15, 20, 50, 70, 100]
+    frac_list = [.01, .05, .1, .2, .5, .7, 1]
+    n_time_steps_pert = [int(frac*time_steps) for frac in frac_list] #[1, 2, 5, 10, 15, 20, 50, 70, 100]
     attr_dic = {'Gradient Shap': np.zeros((len(test_dataset), 140, 1)),
                 'Integrated Gradients': np.zeros((len(test_dataset), 140, 1)),
                 'DeepLift': np.zeros((len(test_dataset), 140, 1)),
@@ -99,13 +100,13 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 50,
         plt.plot(n_time_steps_pert, rep_shift_dic[explainer].mean(axis=-1), label=explainer)
         plt.fill_between(n_time_steps_pert, rep_shift_dic[explainer].mean(axis=-1)-rep_shift_dic[explainer].std(axis=-1),
                          rep_shift_dic[explainer].mean(axis=-1) + rep_shift_dic[explainer].std(axis=-1), alpha=0.4)
-    plt.xlabel("Number of Perturbed Time Steps")
+    plt.xlabel("% Perturbed Time Steps")
     plt.ylabel("Latent Shift")
     plt.legend()
     plt.savefig(save_dir / "time_pert.pdf")
 
 
-def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, dim_latent: int = 16,n_epochs: int = 150,
+def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, dim_latent: int = 16, n_epochs: int = 150,
                                    subtrain_size: int = 200, checkpoint_interval: int = 10) -> None:
     # Initialize seed and device
     torch.random.manual_seed(random_seed)

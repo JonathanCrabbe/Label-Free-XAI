@@ -12,6 +12,7 @@ hydra:
 
 dataset: cifar10
 data_dir: data/cifar10
+experiment_name: consistency_features
 
 # model
 backbone: resnet18 # or resnet34, resnet50

@@ -33,10 +33,11 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
     # Initialize seed and device
     torch.random.manual_seed(random_seed)
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    n_pixels_pert = [1, 2, 3, 4, 5, 10, 20, 30, 50]
+    W = 28  # Image width = height
+    pert_percentages = [5, 10, 20, 50, 80, 100]
+    n_pixels_pert = [int(perc*W**2 / 100) for perc in pert_percentages] #[1, 2, 3, 4, 5, 10, 20, 30, 50]
 
     # Load MNIST
-    W = 28  # Image width = height
     data_dir = Path.cwd() / "data/mnist"
     train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
     test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
@@ -62,61 +63,44 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
     autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs)
     autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
 
-    # Create dictionaries to store feature importance and shift induced by perturbations
-    attr_dic = {'Gradient Shap': np.zeros((len(test_dataset), 1, 28, 28)),
-                'Integrated Gradients': np.zeros((len(test_dataset), 1, 28, 28)),
-                'DeepLift': np.zeros((len(test_dataset), 1, 28, 28)),
-                'Saliency': np.zeros((len(test_dataset), 1, 28, 28))
-                }
-    rep_shift_dic = {'Gradient Shap': np.zeros((len(n_pixels_pert), len(test_loader))),
-                     'Integrated Gradients': np.zeros((len(n_pixels_pert), len(test_loader))),
-                     'DeepLift': np.zeros((len(n_pixels_pert), len(test_loader))),
-                     'Saliency': np.zeros((len(n_pixels_pert), len(test_loader))),
-                     'Random': np.zeros((len(n_pixels_pert), len(test_loader)))}
+    attr_methods = {"Gradient Shap": GradientShap,
+                    "Integrated Gradients": IntegratedGradients,
+                    "Saliency": Saliency,
+                    "Random": None}
+    results_data = []
     baseline_features = torch.zeros((1, 1, W, W)).to(device)  # Baseline image for attributions
+    for method_name in attr_methods:
+        logging.info(f'Computing feature importance with {method_name}')
+        results_data.append([method_name, 0, 0])
+        attr_method = attr_methods[method_name]
+        if attr_method is not None:
+            attr = attribute_auxiliary(encoder, test_loader, device, attr_method(encoder), baseline_features)
+        else:
+            np.random.seed(random_seed)
+            attr = np.random.randn(len(test_dataset), 1, W, W)
 
-    for n_batch, (batch_images, _) in enumerate(test_loader):
-        batch_images = batch_images.to(device)
-        auxiliary_encoder = AuxiliaryFunction(encoder, batch_images)  # Parametrize the auxiliary encoder to the batch
-        explainer_dic = {'Gradient Shap': GradientShap(auxiliary_encoder),
-                         'Integrated Gradients': IntegratedGradients(auxiliary_encoder),
-                         'DeepLift': DeepLift(auxiliary_encoder),
-                         'Saliency': Saliency(auxiliary_encoder)
-                         }
-        for explainer in rep_shift_dic:
-            if explainer in ["Gradient Shap", "Integrated Gradients", "DeepLift"]:
-                attr_batch = explainer_dic[explainer].attribute(batch_images, baseline_features)
-            elif explainer in ["Saliency"]:
-                attr_batch = explainer_dic[explainer].attribute(batch_images)
-            for pert_id, n_pixels in enumerate(n_pixels_pert):
-                mask = torch.ones(batch_images.shape, device=device)
-                if explainer in explainer_dic.keys():  # Perturb the most important pixels
-                    top_pixels = torch.topk(torch.abs(attr_batch).view(len(batch_images), -1), n_pixels)[1]
-                    for k in range(n_pixels):
-                        mask[:, 0, top_pixels[:, k] // W, top_pixels[:, k] % W] = 0
-                    attr_dic[explainer][n_batch * batch_size:(n_batch * batch_size + len(batch_images))] = \
-                        attr_batch.detach().cpu().numpy()
-                elif explainer == "Random":  # Perturb random pixels
-                    for batch_id in range(len(batch_images)):
-                        top_pixels = torch.randperm(W ** 2)[:n_pixels]
-                        for k in range(n_pixels):
-                            mask[batch_id, 0, top_pixels[k] // W, top_pixels[k] % W] = 0
-                batch_images_pert = mask * batch_images
-                # Compute the latent shift between perturbed and unperturbed images
-                representation_shift = torch.sqrt(
-                    torch.sum((encoder(batch_images_pert) - encoder(batch_images)) ** 2, -1))
-                rep_shift_dic[explainer][pert_id, n_batch] = torch.mean(representation_shift).cpu().detach().numpy()
+        for pert_percentage in pert_percentages:
+            logging.info(f'Perturbing {pert_percentage}% of the features with {method_name}')
+            mask_size = int(pert_percentage * W ** 2 / 100)
+            masks = generate_masks(attr, mask_size)
+            for batch_id, (images, _) in enumerate(test_loader):
+                mask = masks[batch_id * batch_size:batch_id * batch_size + len(images)].to(device)
+                images = images.to(device)
+                original_reps = encoder(images)
+                images = mask * images
+                pert_reps = encoder(images)
+                rep_shift = torch.mean(torch.sum((original_reps - pert_reps) ** 2, dim=-1)).item()
+                results_data.append([method_name, pert_percentage, rep_shift])
 
+    logging.info(f"Saving the plot")
+    results_df = pd.DataFrame(results_data, columns=["Method", "% Perturbed Pixels", "Representation Shift"])
+    sns.set(font_scale=1.3)
     sns.set_style("white")
     sns.set_palette("colorblind")
-    for explainer in rep_shift_dic:
-        plt.plot(n_pixels_pert, rep_shift_dic[explainer].mean(axis=-1), label=explainer)
-        plt.fill_between(n_pixels_pert, rep_shift_dic[explainer].mean(axis=-1) - rep_shift_dic[explainer].std(axis=-1),
-                         rep_shift_dic[explainer].mean(axis=-1) + rep_shift_dic[explainer].std(axis=-1), alpha=0.4)
-    plt.xlabel("Number of Perturbed Pixels")
-    plt.ylabel("Latent Shift")
-    plt.legend()
-    plt.savefig(save_dir / "pixel_pert.pdf")
+    sns.lineplot(data=results_df, x="% Perturbed Pixels", y="Representation Shift", hue="Method")
+    plt.tight_layout()
+    plt.savefig(save_dir / "mnist_consistency_features.pdf")
+    plt.close()
 
 
 def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent: int = 4,
@@ -165,20 +149,21 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
                       SimplEx(autoencoder, X_train, mse_loss),
                       NearestNeighbours(autoencoder, X_train, mse_loss)]
     results_list = []
-    n_top_list = [1, 2, 5, 10, 20, 30, 40, 50, 100]
     idx_subtrain = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
     idx_subtest = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
     labels_subtrain = train_dataset.targets[idx_subtrain]
     labels_subtest = test_dataset.targets[idx_subtrain]
+    frac_list = [0.05, 0.1, 0.2, 0.5, 0.7, 1.0]
+    n_top_list = [int(frac * len(idx_subtrain)) for frac in frac_list]
     for explainer in explainer_list:
         logging.info(f"Now fitting {explainer} explainer")
         attribution = explainer.attribute(X_test[idx_subtest], idx_subtrain, recursion_depth=100,
                                           learning_rate=autoencoder.lr)
         autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
         sim_most, sim_least = similarity_rates(attribution, labels_subtrain, labels_subtest, n_top_list)
-        results_list += [[str(explainer), "Most Important", n_top_list[k], sim_most[k]] for k in range(len(n_top_list))]
-        results_list += [[str(explainer), "Least Important", n_top_list[k], sim_least[k]] for k in range(len(n_top_list))]
-    results_df = pd.DataFrame(results_list, columns=["Explainer", "Type of Examples", "Number of Examples Selected",
+        results_list += [[str(explainer), "Most Important", 100*frac, sim] for frac, sim in zip(frac_list, sim_most)]
+        results_list += [[str(explainer), "Least Important", 100*frac, sim] for frac, sim in zip(frac_list, sim_least)]
+    results_df = pd.DataFrame(results_list, columns=["Explainer", "Type of Examples", "% Examples Selected",
                                                      "Similarity Rate"])
     results_df.to_csv(save_dir/"metrics.csv")
     sns.lineplot(data=results_df, x="Number of Examples Selected",
