@@ -11,7 +11,7 @@ import itertools
 import argparse
 import csv
 from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, Subset, RandomSampler
 from torchvision import transforms
 from scipy.stats import spearmanr
 from explanations.features import AuxiliaryFunction, attribute_auxiliary, attribute_individual_dim
@@ -35,7 +35,6 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 200,
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     W = 28  # Image width = height
     pert_percentages = [5, 10, 20, 50, 80, 100]
-    n_pixels_pert = [int(perc*W**2 / 100) for perc in pert_percentages] #[1, 2, 3, 4, 5, 10, 20, 30, 50]
 
     # Load MNIST
     data_dir = Path.cwd() / "data/mnist"
@@ -120,10 +119,6 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
     test_dataset.transform = test_transform
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    X_train = train_dataset.data
-    X_train = X_train.unsqueeze(1).float()
-    X_test = test_dataset.data
-    X_test = X_test.unsqueeze(1).float()
 
     # Initialize encoder, decoder and autoencoder wrapper
     pert = RandomNoise()
@@ -135,38 +130,51 @@ def consistency_examples(random_seed: int = 1, batch_size: int = 200, dim_latent
     autoencoder.to(device)
 
     # Train the denoising autoencoder
+    logging.info("Now fitting autoencoder")
     save_dir = Path.cwd() / "results/mnist/consistency_examples"
     if not save_dir.exists():
         os.makedirs(save_dir)
     autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs, checkpoint_interval=10)
     autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
+    autoencoder.train().to(device)
+
+    idx_subtrain = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
+    idx_subtest = [torch.nonzero(test_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
+    train_subset = Subset(train_dataset, idx_subtrain)
+    test_subset = Subset(test_dataset, idx_subtest)
+    subtrain_loader = DataLoader(train_subset)
+    subtest_loader = DataLoader(test_subset)
+    labels_subtrain = torch.cat([label for _, label in subtrain_loader])
+    labels_subtest = torch.cat([label for _, label in subtest_loader])
+
+    # Create a training set sampler with replacement for computing influence functions
+    recursion_depth = 100
+    train_sampler = RandomSampler(train_dataset, replacement=True, num_samples=recursion_depth*batch_size)
+    train_loader_replacement = DataLoader(train_dataset, batch_size, sampler=train_sampler)
 
     # Fitting explainers, computing the metric and saving everything
-    autoencoder.train().cpu()
     mse_loss = torch.nn.MSELoss()
-    explainer_list = [InfluenceFunctions(autoencoder, X_train, mse_loss),
-                      TracIn(autoencoder, X_train, mse_loss),
-                      SimplEx(autoencoder, X_train, mse_loss),
-                      NearestNeighbours(autoencoder, X_train, mse_loss)]
-    results_list = []
-    idx_subtrain = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
-    idx_subtest = [torch.nonzero(train_dataset.targets == (n % 10))[n // 10].item() for n in range(subtrain_size)]
-    labels_subtrain = train_dataset.targets[idx_subtrain]
-    labels_subtest = test_dataset.targets[idx_subtrain]
+    explainer_list = [InfluenceFunctions(autoencoder, mse_loss, save_dir/"if_grads"),
+                      TracIn(autoencoder, mse_loss, save_dir/"tracin_grads"),
+                      SimplEx(autoencoder, mse_loss),
+                      NearestNeighbours(autoencoder, mse_loss)]
     frac_list = [0.05, 0.1, 0.2, 0.5, 0.7, 1.0]
     n_top_list = [int(frac * len(idx_subtrain)) for frac in frac_list]
+    results_list = []
     for explainer in explainer_list:
         logging.info(f"Now fitting {explainer} explainer")
-        attribution = explainer.attribute(X_test[idx_subtest], idx_subtrain, recursion_depth=100,
-                                          learning_rate=autoencoder.lr)
+        attribution = explainer.attribute_loader(device, subtrain_loader, subtest_loader,
+                                                 train_loader_replacement=train_loader_replacement,
+                                                 recursion_depth=recursion_depth)
         autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
         sim_most, sim_least = similarity_rates(attribution, labels_subtrain, labels_subtest, n_top_list)
         results_list += [[str(explainer), "Most Important", 100*frac, sim] for frac, sim in zip(frac_list, sim_most)]
         results_list += [[str(explainer), "Least Important", 100*frac, sim] for frac, sim in zip(frac_list, sim_least)]
     results_df = pd.DataFrame(results_list, columns=["Explainer", "Type of Examples", "% Examples Selected",
                                                      "Similarity Rate"])
+    logging.info(f"Saving results in {save_dir}")
     results_df.to_csv(save_dir/"metrics.csv")
-    sns.lineplot(data=results_df, x="Number of Examples Selected",
+    sns.lineplot(data=results_df, x="% Examples Selected",
                  y="Similarity Rate", hue="Explainer", style="Type of Examples", palette="colorblind")
     plt.savefig(save_dir/"similarity_rates.pdf")
 
@@ -461,136 +469,21 @@ def roar_test(random_seed: int = 1, batch_size: int = 200, dim_latent: int = 4, 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("-e", type=str, default="disvae")
-    parser.add_argument("-n", type=int, default=5)
-    parser.add_argument("-b", type=int, default=300)
-    parser.add_argument("-r", type=int, default=1)
+    parser.add_argument("--name", type=str, default="disvae")
+    parser.add_argument("--n_runs", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=300)
+    parser.add_argument("--random_seed", type=int, default=1)
     args = parser.parse_args()
-    if args.e == "disvae":
-        disvae_feature_importance(n_runs=args.n, batch_size=args.b, random_seed=args.r)
-    elif args.e == "pretext":
-        pretext_task_sensitivity(n_runs=args.n, batch_size=args.b, random_seed=args.r)
-    elif args.e == "consistency_features":
-        consistency_feature_importance(batch_size=args.b, random_seed=args.r)
-    elif args.e == "consistency_examples":
-        consistency_examples(batch_size=args.b, random_seed=args.r)
-    elif args.e == "roar_test":
-        roar_test(batch_size=args.b, random_seed=args.r, n_epochs=10)
+    if args.name == "disvae":
+        disvae_feature_importance(n_runs=args.n_runs, batch_size=args.batch_size, random_seed=args.random_seed)
+    elif args.name == "pretext":
+        pretext_task_sensitivity(n_runs=args.n_runs, batch_size=args.batch_size, random_seed=args.random_seed)
+    elif args.name == "consistency_features":
+        consistency_feature_importance(batch_size=args.batch_size, random_seed=args.random_seed)
+    elif args.name == "consistency_examples":
+        consistency_examples(batch_size=args.batch_size, random_seed=args.random_seed)
+    elif args.name == "roar_test":
+        roar_test(batch_size=args.batch_size, random_seed=args.random_seed, n_epochs=10)
     else:
         raise ValueError("Invalid experiment name")
 
-"""
-def track_importance(random_seed: int = 1, batch_size: int = 200,
-                     dim_latent: int = 50, n_epochs: int = 10,
-                     pretrain_ratio: float = 0.9) -> None:
-    # Initialize seed and device
-    torch.random.manual_seed(random_seed)
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
-    # Load MNIST
-    data_dir = Path.cwd() / "data/mnist"
-    train_dataset = torchvision.datasets.MNIST(data_dir, train=True, download=True)
-    test_dataset = torchvision.datasets.MNIST(data_dir, train=False, download=True)
-    train_transform = transforms.Compose([transforms.ToTensor()])
-    test_transform = transforms.Compose([transforms.ToTensor()])
-    train_dataset.transform = train_transform
-    test_dataset.transform = test_transform
-    pretrain_size = int(pretrain_ratio * len(train_dataset))
-    pretrain_dataset, train_dataset = random_split(train_dataset, [pretrain_size, len(train_dataset) - pretrain_size])
-    pretrain_loader = torch.utils.data.DataLoader(pretrain_dataset, batch_size=batch_size)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    # Initialize encoder and decoder
-    encoder = EncoderMnist(encoded_space_dim=dim_latent)
-    decoder = DecoderMnist(encoded_space_dim=dim_latent)
-    encoder.to(device)
-    decoder.to(device)
-
-    # Compute the initial attribution
-    grad_shap = GradientShap(forward_func=encoder)
-    baseline_features = torch.zeros((1, 1, 28, 28), device=device)
-    initial_attribution = attribute_auxiliary(encoder, test_loader, device, grad_shap, baseline_features)
-
-    # Initialize pretrain optimizer
-    loss_pretrain = torch.nn.MSELoss()
-    params_pretrain = [
-        {'params': encoder.parameters()},
-        {'params': decoder.parameters()}
-    ]
-    optim_pretrain = torch.optim.Adam(params_pretrain, lr=1e-03, weight_decay=1e-05)
-
-    # Train the denoising autoencoder
-    print("\t Pretraining \t")
-    pretrain_loss_hist = {'train_loss': [], 'val_loss': []}
-    for epoch in range(n_epochs):
-        train_loss = train_denoiser_epoch(encoder, decoder, device, pretrain_loader, loss_pretrain, optim_pretrain,
-                                          noise_factor=0.3)
-        val_loss = test_denoiser_epoch(encoder, decoder, device, test_loader, loss_pretrain)
-        pretrain_loss_hist['train_loss'].append(train_loss)
-        pretrain_loss_hist['val_loss'].append(val_loss)
-        print(f'\n Epoch {epoch + 1}/{n_epochs} \t Train loss {train_loss:.3g} \t Val loss {val_loss:.3g} \t')
-
-    # Compute the attribution after pretraining
-    pretrain_attribution = attribute_auxiliary(encoder, test_loader, device, grad_shap, baseline_features)
-
-    # Initialize classifier
-    classifier = ClassifierMnist(encoder)
-    classifier = classifier.to(device)
-
-    # Initialize optimizer
-    loss_train = torch.nn.CrossEntropyLoss()
-    params_train = [
-        {'params': classifier.parameters()},
-    ]
-    optim_train = torch.optim.Adam(params_train)
-
-    # Train the classifier
-    print("\t Training \t")
-    train_loss_hist = {'train_loss': [], 'val_loss': []}
-    for epoch in range(n_epochs):
-        train_loss = train_classifier_epoch(classifier, device, train_loader, loss_train, optim_train)
-        val_loss = test_classifier_epoch(classifier, device, test_loader, loss_train)
-        train_loss_hist['train_loss'].append(train_loss)
-        train_loss_hist['val_loss'].append(val_loss)
-        print(f'\n Epoch {epoch + 1}/{n_epochs} \t Train loss {train_loss:.3g} \t Val loss {val_loss:.3g} \t')
-
-    # Compute the attribution after training
-    train_attribution = attribute_auxiliary(encoder, test_loader, device, grad_shap, baseline_features)
-
-    # Compute the attribution deltas
-    print(f'Initial vs Pretrained Attribution Delta: {np.mean(np.abs(pretrain_attribution - initial_attribution)):.3g}')
-    print(f'Pretrained vs Trained Attribution Delta: {np.mean(np.abs(train_attribution - pretrain_attribution)):.3g}')
-
-    '''
-    ig_explainer = IntegratedGradients(auxiliary_encoder)
-        dl_explainer = DeepLift(auxiliary_encoder)
-        ig_attr_batch = ig_explainer.attribute(test_images, baselines=baseline_features)
-        dl_attr_batch = dl_explainer.attribute(test_images, baselines=baseline_features).detach()
-        ig_attribution[n_batch * batch_size:(n_batch * batch_size + len(test_images))] = ig_attr_batch.cpu().numpy()
-        dl_attribution[n_batch * batch_size:(n_batch * batch_size + len(test_images))] = dl_attr_batch.cpu().numpy()
-    
-    #attribution_deltas.append(attribution_delta.data)
-        #prev_attribution = current_attribution
-
-    #attribution_delta = np.mean(np.abs(current_attribution - prev_attribution))
-    
-    #prev_attribution = np.zeros((len(test_dataset), 1, 28, 28))
-        #current_attribution = np.zeros((len(test_dataset), 1, 28, 28))
-    
-    #plot_image_saliency(test_images[0], ig_attr_batch[0])
-        #plot_image_saliency(test_images[0], dl_attr_batch[0])
-        
-    test_images, _ = next(iter(test_loader))
-    test_image = test_images[10:11].to(device)
-    auxiliary_encoder = AuxiliaryFunction(encoder, test_image)
-    ig_explainer = IntegratedGradients(auxiliary_encoder)
-    baseline_image = torch.zeros(test_image.shape, device=device)
-    ig_attr = ig_explainer.attribute(test_image, baseline_image)
-
-    visualize_image_attr(torch.permute(ig_attr[0], (1, 2, 0)).cpu().numpy(),
-                         torch.permute(test_image[0], (1, 2, 0)).cpu().numpy(),
-                         "blended_heat_map")
-    '''
-
-"""

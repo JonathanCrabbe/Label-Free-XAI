@@ -8,11 +8,12 @@ import argparse
 import matplotlib.pyplot as plt
 from pathlib import Path
 from utils.datasets import ECG5000
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, Subset, RandomSampler
 from models.time_series import RecurrentAutoencoder, AutoencoderCNN
-from explanations.features import AuxiliaryFunction
+from explanations.features import AuxiliaryFunction, attribute_auxiliary
 from explanations.examples import InfluenceFunctions, TracIn, SimplEx, NearestNeighbours
 from utils.metrics import similarity_rates
+from utils.feature_attribution import generate_tseries_masks
 from captum.attr import GradientShap, Saliency, IntegratedGradients, DeepLift
 
 
@@ -45,65 +46,47 @@ def consistency_feature_importance(random_seed: int = 1, batch_size: int = 50,
     autoencoder.train()
     encoder = autoencoder.encoder
     autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
+    autoencoder.to(device)
 
-    # Create dictionaries to store feature importance and shift induced by perturbations
-    frac_list = [.01, .05, .1, .2, .5, .7, 1]
-    n_time_steps_pert = [int(frac*time_steps) for frac in frac_list] #[1, 2, 5, 10, 15, 20, 50, 70, 100]
-    attr_dic = {'Gradient Shap': np.zeros((len(test_dataset), 140, 1)),
-                'Integrated Gradients': np.zeros((len(test_dataset), 140, 1)),
-                'DeepLift': np.zeros((len(test_dataset), 140, 1)),
-                'Saliency': np.zeros((len(test_dataset), 140, 1))
-                }
-    rep_shift_dic = {'Gradient Shap': np.zeros((len(n_time_steps_pert), len(test_loader))),
-                     'Integrated Gradients': np.zeros((len(n_time_steps_pert), len(test_loader))),
-                     'DeepLift': np.zeros((len(n_time_steps_pert), len(test_loader))),
-                     'Saliency': np.zeros((len(n_time_steps_pert), len(test_loader))),
-                     'Random': np.zeros((len(n_time_steps_pert), len(test_loader)))}
+    attr_methods = {"Gradient Shap": GradientShap,
+                    "Integrated Gradients": IntegratedGradients,
+                    "Saliency": Saliency,
+                    "Random": None}
+    results_data = []
+    pert_percentages = [5, 10, 20, 50, 80, 100]
 
-    logging.info("Fitting explainers.")
-    for n_batch, (batch_sequences, _) in enumerate(test_loader):
-        batch_sequences = batch_sequences.to(device)
-        auxiliary_encoder = AuxiliaryFunction(encoder, batch_sequences)  # Parametrize the auxiliary encoder to the batch
-        explainer_dic = {'Gradient Shap': GradientShap(auxiliary_encoder),
-                         'Integrated Gradients': IntegratedGradients(auxiliary_encoder),
-                         'DeepLift': DeepLift(auxiliary_encoder),
-                         'Saliency': Saliency(auxiliary_encoder)
-                         }
-        for explainer in rep_shift_dic:
-            if explainer in ["Gradient Shap", "Integrated Gradients", "DeepLift"]:
-                attr_batch = explainer_dic[explainer].attribute(batch_sequences, baseline_sequence)
-            elif explainer in ["Saliency"]:
-                attr_batch = explainer_dic[explainer].attribute(batch_sequences)
-            for pert_id, n_pert in enumerate(n_time_steps_pert):
-                mask = torch.ones(batch_sequences.shape, device=device)
-                if explainer in explainer_dic.keys():  # Perturb the most important pixels
-                    top_time_steps = torch.topk(torch.abs(attr_batch).view(len(batch_sequences), -1), n_pert)[1]
-                    for k in range(n_pert):
-                        mask[:, top_time_steps[:, k], 0] = 0
-                    attr_dic[explainer][n_batch * batch_size:(n_batch * batch_size + len(batch_sequences))] = \
-                        attr_batch.detach().cpu().numpy()
-                elif explainer == "Random":  # Perturb random pixels
-                    for batch_id in range(len(batch_sequences)):
-                        top_time_steps = torch.randperm(time_steps)[:n_pert]
-                        for k in range(n_pert):
-                            mask[batch_id, top_time_steps[k], 0] = 0
-                batch_sequences_pert = mask * batch_sequences + (1-mask) * baseline_sequence
-                # Compute the latent shift between perturbed and unperturbed images
-                representation_shift = torch.sqrt(
-                    torch.sum((encoder(batch_sequences_pert) - encoder(batch_sequences)) ** 2, -1))
-                rep_shift_dic[explainer][pert_id, n_batch] = torch.mean(representation_shift).cpu().detach().numpy()
+    for method_name in attr_methods:
+        logging.info(f'Computing feature importance with {method_name}')
+        results_data.append([method_name, 0, 0])
+        attr_method = attr_methods[method_name]
+        if attr_method is not None:
+            attr = attribute_auxiliary(encoder, test_loader, device, attr_method(encoder), baseline_sequence)
+        else:
+            np.random.seed(random_seed)
+            attr = np.random.randn(len(test_dataset), time_steps, 1)
 
-    # Plot the results
+        for pert_percentage in pert_percentages:
+            logging.info(f'Perturbing {pert_percentage}% of the features with {method_name}')
+            mask_size = int(pert_percentage * time_steps / 100)
+            masks = generate_tseries_masks(attr, mask_size)
+            for batch_id, (tseries, _) in enumerate(test_loader):
+                mask = masks[batch_id * batch_size:batch_id * batch_size + len(tseries)].to(device)
+                tseries = tseries.to(device)
+                original_reps = encoder(tseries)
+                tseries_pert = mask * tseries + (1-mask) * baseline_sequence
+                pert_reps = encoder(tseries_pert)
+                rep_shift = torch.mean(torch.sum((original_reps - pert_reps) ** 2, dim=-1)).item()
+                results_data.append([method_name, pert_percentage, rep_shift])
+
+    logging.info(f"Saving results in {save_dir}")
+    results_df = pd.DataFrame(results_data, columns=["Method", "% Perturbed Time Steps", "Representation Shift"])
+    sns.set(font_scale=1.3)
     sns.set_style("white")
     sns.set_palette("colorblind")
-    for explainer in rep_shift_dic:
-        plt.plot(n_time_steps_pert, rep_shift_dic[explainer].mean(axis=-1), label=explainer)
-        plt.fill_between(n_time_steps_pert, rep_shift_dic[explainer].mean(axis=-1)-rep_shift_dic[explainer].std(axis=-1),
-                         rep_shift_dic[explainer].mean(axis=-1) + rep_shift_dic[explainer].std(axis=-1), alpha=0.4)
-    plt.xlabel("% Perturbed Time Steps")
-    plt.ylabel("Latent Shift")
-    plt.legend()
-    plt.savefig(save_dir / "time_pert.pdf")
+    sns.lineplot(data=results_df, x="% Perturbed Time Steps", y="Representation Shift", hue="Method")
+    plt.tight_layout()
+    plt.savefig(save_dir / "ecg5000_consistency_features.pdf")
+    plt.close()
 
 
 def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, dim_latent: int = 16, n_epochs: int = 150,
@@ -121,10 +104,10 @@ def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, d
     train_dataset, test_dataset = random_split(train_dataset, (4000, 1000))
     train_loader = DataLoader(train_dataset, batch_size, True)
     test_loader = DataLoader(test_dataset, batch_size, False)
-    X_train = torch.stack([train_dataset[k][0] for k in range(len(train_dataset))])
-    y_train = torch.tensor([train_dataset[k][1] for k in range(len(train_dataset))])
-    X_test = torch.stack([test_dataset[k][0] for k in range(len(test_dataset))])
-    y_test = torch.tensor([test_dataset[k][1] for k in range(len(test_dataset))])
+    #X_train = torch.stack([train_dataset[k][0] for k in range(len(train_dataset))])
+    # X_test = torch.stack([test_dataset[k][0] for k in range(len(test_dataset))])
+
+
     time_steps = 140
     n_features = 1
 
@@ -136,49 +119,72 @@ def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, d
     autoencoder.fit(device, train_loader, test_loader, save_dir, n_epochs, checkpoint_interval=checkpoint_interval)
     autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
 
-    # Fitting explainers, computing the metric and saving everything
-    autoencoder.train().cpu()
-    l1_loss = torch.nn.L1Loss()
-    explainer_list = [InfluenceFunctions(autoencoder, X_train, l1_loss),
-                      TracIn(autoencoder, X_train, l1_loss),
-                      SimplEx(autoencoder, X_train, l1_loss),
-                      NearestNeighbours(autoencoder, X_train, l1_loss)]
-    results_list = []
-    n_top_list = [1, 2, 5, 10, 20, 30, 40, 50, 100]
+    # Prepare subset loaders for example-based explanation methods
+    y_train = torch.tensor([train_dataset[k][1] for k in range(len(train_dataset))])
+    y_test = torch.tensor([test_dataset[k][1] for k in range(len(test_dataset))])
     idx_subtrain = [torch.nonzero(y_train == (n % 2))[n // 2].item() for n in range(subtrain_size)]
-    idx_subtest = [torch.nonzero(y_test == (n % 2))[n // 2].item() for n in range(subtrain_size)]
-    labels_subtrain = y_train[idx_subtrain]
-    labels_subtest = y_test[idx_subtest]
+    idx_subtest = torch.randperm(len(test_dataset))[:subtrain_size]
+    train_subset = Subset(train_dataset, idx_subtrain)
+    test_subset = Subset(test_dataset, idx_subtest)
+    subtrain_loader = DataLoader(train_subset)
+    subtest_loader = DataLoader(test_subset)
+    labels_subtrain = torch.cat([label for _, label in subtrain_loader])
+    labels_subtest = torch.cat([label for _, label in subtest_loader])
+    recursion_depth = 100
+    train_sampler = RandomSampler(train_dataset, replacement=True, num_samples=recursion_depth * batch_size)
+    train_loader_replacement = DataLoader(train_dataset, batch_size, sampler=train_sampler)
+
+    # Fitting explainers, computing the metric and saving everything
+    autoencoder.train().to(device)
+    l1_loss = torch.nn.L1Loss()
+    explainer_list = [#InfluenceFunctions(autoencoder, l1_loss, save_dir/"if_grads"),
+                      TracIn(autoencoder, l1_loss, save_dir/"tracin_grads"),
+                      SimplEx(autoencoder, l1_loss),
+                      NearestNeighbours(autoencoder, l1_loss)]
+    results_list = []
+    #n_top_list = [1, 2, 5, 10, 20, 30, 40, 50, 100]
+    frac_list = [0.05, 0.1, 0.2, 0.5, 0.7, 1.0]
+    n_top_list = [int(frac * len(idx_subtrain)) for frac in frac_list]
     for explainer in explainer_list:
         logging.info(f"Now fitting {explainer} explainer")
-        attribution = explainer.attribute(X_test[idx_subtest], idx_subtrain, recursion_depth=100,
-                                          learning_rate=autoencoder.lr)
+        if isinstance(explainer, InfluenceFunctions):
+            torch.backends.cudnn.flags(enabled=False)
+        else:
+            torch.backends.cudnn.flags(enabled=True)
+        attribution = explainer.attribute_loader(device, subtrain_loader, subtest_loader,
+                                                 train_loader_replacement=train_loader_replacement,
+                                                 recursion_depth=recursion_depth)
+        #attribution = explainer.attribute(X_test[idx_subtest], idx_subtrain, recursion_depth=100,
+        #                                  learning_rate=autoencoder.lr)
         autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
         sim_most, sim_least = similarity_rates(attribution, labels_subtrain, labels_subtest, n_top_list)
-        results_list += [[str(explainer), "Most Important", n_top_list[k], sim_most[k]] for k in range(len(n_top_list))]
-        results_list += [[str(explainer), "Least Important", n_top_list[k], sim_least[k]] for k in range(len(n_top_list))]
-    results_df = pd.DataFrame(results_list, columns=["Explainer", "Type of Examples", "Number of Examples Selected",
+        results_list += [[str(explainer), "Most Important", 100 * frac, sim] for frac, sim in zip(frac_list, sim_most)]
+        results_list += [[str(explainer), "Least Important", 100 * frac, sim] for frac, sim in zip(frac_list, sim_least)]
+    results_df = pd.DataFrame(results_list, columns=["Explainer", "Type of Examples", "% Examples Selected",
                                                      "Similarity Rate"])
+    logging.info(f"Saving results in {save_dir}")
     results_df.to_csv(save_dir/"metrics.csv")
-    sns.lineplot(data=results_df, x="Number of Examples Selected",
+    sns.lineplot(data=results_df, x="% Examples Selected",
                  y="Similarity Rate", hue="Explainer", style="Type of Examples", palette="colorblind")
-    plt.savefig(save_dir/"similarity_rates.pdf")
+    plt.savefig(save_dir/"ecg5000_similarity_rates.pdf")
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("-e", type=str, default="consistency_features")
-    parser.add_argument("-b", type=int, default=50)
-    parser.add_argument("-r", type=int, default=42)
-    parser.add_argument("-d", type=int, default=64)
-    parser.add_argument("-checkpoint_interval", type=int, default=10)
-    parser.add_argument("-subset_size", type=int, default=200)
+    parser.add_argument("--name", type=str, default="consistency_features")
+    parser.add_argument("--batch_size", type=int, default=50)
+    parser.add_argument("--random_seed", type=int, default=42)
+    parser.add_argument("--dim_latent", type=int, default=64)
+    parser.add_argument("--checkpoint_interval", type=int, default=10)
+    parser.add_argument("--subset_size", type=int, default=1000)
     args = parser.parse_args()
-    if args.e == "consistency_features":
-        consistency_feature_importance(batch_size=args.b, random_seed=args.r, dim_latent=args.d)
-    elif args.e == "consistency_examples":
-        consistency_example_importance(batch_size=args.b, random_seed=args.r, dim_latent=args.d,
-                                       subtrain_size=args.subset_size, checkpoint_interval=args.checkpoint_interval)
+    if args.name == "consistency_features":
+        consistency_feature_importance(batch_size=args.batch_size, random_seed=args.random_seed,
+                                       dim_latent=args.dim_latent)
+    elif args.name == "consistency_examples":
+        consistency_example_importance(batch_size=args.batch_size, random_seed=args.random_seed,
+                                       dim_latent=args.dim_latent, subtrain_size=args.subset_size,
+                                       checkpoint_interval=args.checkpoint_interval)
     else:
         raise ValueError("Invalid experiment name.")

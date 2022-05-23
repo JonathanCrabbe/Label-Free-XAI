@@ -1,4 +1,7 @@
 import abc
+import itertools
+import os
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -6,11 +9,11 @@ import torch.nn.functional as F
 import logging
 import datetime
 from tqdm import tqdm
+from tqdm.contrib.itertools import product
 from pathlib import Path
 from utils.influence import hessian_vector_product, stack_torch_tensors, save_json, display_progress, grad_z, s_test
 from torch.utils.data import DataLoader
 from abc import ABC
-
 
 
 class ExampleBasedExplainer(ABC):
@@ -42,8 +45,11 @@ class ExampleBasedExplainer(ABC):
 
 
 class InfluenceFunctions(ExampleBasedExplainer, ABC):
-    def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
+    def __init__(self, model: nn.Module,  loss_f: callable, save_dir: Path, X_train: torch.Tensor = None):
         super().__init__(model, X_train, loss_f)
+        self.save_dir = save_dir
+        if not save_dir.exists():
+            os.makedirs(save_dir)
 
     def attribute(self, X_test: torch.Tensor, train_idx: list, batch_size: int = 1, damp: float = 1e-3,
                   scale: float = 1000, recursion_depth: int = 100, **kwargs) -> torch.Tensor:
@@ -89,13 +95,47 @@ class InfluenceFunctions(ExampleBasedExplainer, ABC):
         attribution = torch.einsum('ab,cb->ac', test_grads, IHVP_)
         return attribution
 
+    def attribute_loader(self, device: torch.device, train_loader: DataLoader, test_loader: DataLoader,
+                         train_loader_replacement: DataLoader, recursion_depth: int = 100,
+                         damp: float = 1e-3, scale: float = 1000, **kwargs) -> torch.Tensor:
+        attribution = torch.zeros((len(test_loader), len(train_loader)))
+        for test_idx, (x_test, _) in enumerate(tqdm(test_loader, unit="example", leave=False)):
+            x_test = x_test.to(device)
+            test_loss = self.loss_f(x_test, self.model(x_test))
+            test_grad = stack_torch_tensors(torch.autograd.grad(test_loss, self.model.encoder.parameters(), create_graph=True)).detach().clone()
+            torch.save(test_grad.detach().cpu(), self.save_dir/f"test_grad{test_idx}.pt")
+        for train_idx, (x_train, _) in enumerate(tqdm(train_loader, unit="example", leave=False)):
+            x_train = x_train.to(device)
+            loss = self.loss_f(x_train, self.model(x_train))
+            grad = stack_torch_tensors(torch.autograd.grad(loss, self.model.encoder.parameters(), create_graph=True))
+            ihvp = grad.detach().clone()
+            train_sampler = iter(train_loader_replacement)
+            for _ in tqdm(range(recursion_depth), unit="recursion", leave=False):
+                X_sample, _ = next(train_sampler)
+                X_sample = X_sample.to(device)
+                sampled_loss = self.loss_f(X_sample, self.model(X_sample))
+                ihvp_prev = ihvp.detach().clone()
+                hvp = stack_torch_tensors(hessian_vector_product(sampled_loss, self.model, ihvp_prev))
+                ihvp = grad + (1 - damp) * ihvp - hvp / scale
+            ihvp = ihvp / (scale * len(train_loader))   # Rescale Hessian-Vector products
+            torch.save(ihvp.detach().cpu(), self.save_dir/f"train_ihvp{train_idx}.pt")
+
+        for test_idx, train_idx in product(range(len(test_loader)), range(len(train_loader)), leave=False):
+            ihvp = torch.load(self.save_dir/f"train_ihvp{train_idx}.pt")
+            test_grad = torch.load(self.save_dir/f"test_grad{test_idx}.pt")
+            attribution[test_idx, train_idx] = torch.dot(test_grad.flatten(), ihvp.flatten()).detach().clone().cpu()
+        return attribution
+
     def __str__(self):
         return "Influence Functions"
 
 
 class TracIn(ExampleBasedExplainer, ABC):
-    def __init__(self, model: nn.Module, X_train: torch.Tensor, loss_f: callable):
+    def __init__(self, model: nn.Module, loss_f: callable, save_dir: Path, X_train: torch.Tensor = None):
         super().__init__(model, X_train, loss_f)
+        self.save_dir = save_dir
+        if not save_dir.exists():
+            os.makedirs(save_dir)
 
     def attribute(self, X_test: torch.Tensor, train_idx: list, learning_rate: float = 1, **kwargs) -> torch.Tensor:
         attribution = torch.zeros(len(X_test), len(train_idx))
@@ -114,12 +154,32 @@ class TracIn(ExampleBasedExplainer, ABC):
             attribution += torch.einsum('ab,cb->ac', test_grads, train_grads)
         return learning_rate*attribution
 
+    def attribute_loader(self, device: torch.device, train_loader: DataLoader, test_loader: DataLoader, **kwargs) -> torch.Tensor:
+        attribution = torch.zeros((len(test_loader), len(train_loader)))
+        for checkpoint_number, checkpoint_file in enumerate(tqdm(self.model.checkpoints_files, unit="checkpoint", leave=False)):
+            self.model.load_state_dict(torch.load(checkpoint_file), strict=False)
+            for train_idx, (x_train, _) in enumerate(tqdm(train_loader, unit="example", leave=False)):
+                x_train = x_train.to(device)
+                train_loss = self.loss_f(x_train, self.model(x_train))
+                train_grad = stack_torch_tensors(torch.autograd.grad(train_loss, self.model.encoder.parameters(), create_graph=True))
+                torch.save(train_grad.detach().cpu(), self.save_dir / f"train_checkpoint{checkpoint_number}_grad{train_idx}.pt")
+            for test_idx, (x_test, _) in enumerate(tqdm(test_loader, unit="example", leave=False)):
+                x_test = x_test.to(device)
+                test_loss = self.loss_f(x_test, self.model(x_test))
+                test_grad = stack_torch_tensors(torch.autograd.grad(test_loss, self.model.encoder.parameters(), create_graph=True))
+                torch.save(test_grad.detach().cpu(), self.save_dir / f"test_checkpoint{checkpoint_number}_grad{test_idx}.pt")
+            for test_idx, train_idx in product(range(len(test_loader)), range(len(train_loader)), leave=False):
+                train_grad = torch.load(self.save_dir / f"train_checkpoint{checkpoint_number}_grad{train_idx}.pt")
+                test_grad = torch.load(self.save_dir / f"test_checkpoint{checkpoint_number}_grad{test_idx}.pt")
+                attribution[test_idx, train_idx] += torch.dot(train_grad.flatten(), test_grad.flatten())
+        return attribution
+
     def __str__(self):
         return "TracIn"
 
 
 class SimplEx(ExampleBasedExplainer, ABC):
-    def __init__(self, model: nn.Module, X_train: torch.Tensor = None, loss_f: callable = None):
+    def __init__(self, model: nn.Module, loss_f: callable = None, X_train: torch.Tensor = None):
         super().__init__(model, X_train, loss_f)
 
     def attribute(self, X_test: torch.Tensor, train_idx: list, learning_rate: float = 1,
@@ -135,7 +195,7 @@ class SimplEx(ExampleBasedExplainer, ABC):
         return attribution
 
     def attribute_loader(self, device: torch.device, train_loader: DataLoader, test_loader: DataLoader,
-                         batch_size: int = 50) -> torch.Tensor:
+                         batch_size: int = 50, **kwargs) -> torch.Tensor:
         H_train = []
         for x_train, _ in train_loader:
             H_train.append(self.model.encoder(x_train.to(device)).detach().cpu())
@@ -170,7 +230,7 @@ class SimplEx(ExampleBasedExplainer, ABC):
 
 
 class NearestNeighbours(ExampleBasedExplainer, ABC):
-    def __init__(self, model: nn.Module, X_train: torch.Tensor = None, loss_f: callable = None):
+    def __init__(self, model: nn.Module, loss_f: callable = None, X_train: torch.Tensor = None):
         super().__init__(model, X_train, loss_f)
 
     def attribute(self, X_test: torch.Tensor, train_idx: list, batch_size: int = 500, **kwargs) -> torch.Tensor:
@@ -185,7 +245,7 @@ class NearestNeighbours(ExampleBasedExplainer, ABC):
         return attribution
 
     def attribute_loader(self, device: torch.device, train_loader: DataLoader, test_loader: DataLoader,
-                         batch_size: int = 50) -> torch.Tensor:
+                         batch_size: int = 50, **kwargs) -> torch.Tensor:
         H_train = []
         for x_train, _ in train_loader:
             H_train.append(self.model.encoder(x_train.to(device)).detach().cpu())
