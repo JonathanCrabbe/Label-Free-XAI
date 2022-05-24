@@ -253,13 +253,13 @@ def hessian_vector_product(loss, model, v):
         torch.autograd.grad(loss, model.encoder.parameters(), retain_graph=True, create_graph=True))
 
     # Elementwise products
-    elemwise_products = 0
+    elemwise_products = torch.dot(first_grads.flatten(), v.flatten())
 
-    for grad_elem, v_elem in zip(first_grads, v):
-        elemwise_products += torch.sum(grad_elem * v_elem)
+    #for grad_elem, v_elem in zip(first_grads, v):
+    #    elemwise_products += torch.sum(grad_elem * v_elem)
 
     # Second backprop
-    HVP_ = torch.autograd.grad(elemwise_products, model.encoder.parameters(), create_graph=True)
+    HVP_ = torch.autograd.grad(elemwise_products, model.encoder.parameters())
 
     return HVP_
 

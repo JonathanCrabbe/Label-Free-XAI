@@ -106,12 +106,11 @@ def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, d
     test_loader = DataLoader(test_dataset, batch_size, False)
     #X_train = torch.stack([train_dataset[k][0] for k in range(len(train_dataset))])
     # X_test = torch.stack([test_dataset[k][0] for k in range(len(test_dataset))])
-
-
     time_steps = 140
     n_features = 1
 
     # Train the denoising autoencoder
+    logging.info("Fitting autoencoder")
     autoencoder = RecurrentAutoencoder(time_steps, n_features, dim_latent)
     save_dir = Path.cwd() / "results/ecg5000/consistency_examples"
     if not save_dir.exists():
@@ -137,7 +136,7 @@ def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, d
     # Fitting explainers, computing the metric and saving everything
     autoencoder.train().to(device)
     l1_loss = torch.nn.L1Loss()
-    explainer_list = [#InfluenceFunctions(autoencoder, l1_loss, save_dir/"if_grads"),
+    explainer_list = [InfluenceFunctions(autoencoder, l1_loss, save_dir/"if_grads"),
                       TracIn(autoencoder, l1_loss, save_dir/"tracin_grads"),
                       SimplEx(autoencoder, l1_loss),
                       NearestNeighbours(autoencoder, l1_loss)]
@@ -148,12 +147,12 @@ def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, d
     for explainer in explainer_list:
         logging.info(f"Now fitting {explainer} explainer")
         if isinstance(explainer, InfluenceFunctions):
-            torch.backends.cudnn.flags(enabled=False)
+            with torch.backends.cudnn.flags(enabled=False):
+                attribution = explainer.attribute_loader(device, subtrain_loader, subtest_loader,
+                                                         train_loader_replacement=train_loader_replacement,
+                                                         recursion_depth=recursion_depth)
         else:
-            torch.backends.cudnn.flags(enabled=True)
-        attribution = explainer.attribute_loader(device, subtrain_loader, subtest_loader,
-                                                 train_loader_replacement=train_loader_replacement,
-                                                 recursion_depth=recursion_depth)
+            attribution = explainer.attribute_loader(device, subtrain_loader, subtest_loader)
         #attribution = explainer.attribute(X_test[idx_subtest], idx_subtrain, recursion_depth=100,
         #                                  learning_rate=autoencoder.lr)
         autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
@@ -173,7 +172,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", type=str, default="consistency_features")
-    parser.add_argument("--batch_size", type=int, default=50)
+    parser.add_argument("--batch_size", type=int, default=20)
     parser.add_argument("--random_seed", type=int, default=42)
     parser.add_argument("--dim_latent", type=int, default=64)
     parser.add_argument("--checkpoint_interval", type=int, default=10)

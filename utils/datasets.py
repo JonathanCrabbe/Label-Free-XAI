@@ -5,12 +5,13 @@ import abc
 import wget
 import logging
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, datasets
 from torchvision.datasets import MNIST, CIFAR10
 from zipfile import ZipFile
-from arff2pandas import a2p
+from scipy.io.arff import loadarff
 from PIL import Image
 
 """
@@ -172,21 +173,22 @@ class ECG5000(Dataset):
 
         # Load the data and create a train/test set with split
         with open(self.dir / "ECG5000_TRAIN.arff") as f:
-            total_df = a2p.load(f)
+            data, _ = loadarff(f)
+            total_df = pd.DataFrame(data)
         with open(self.dir / "ECG5000_TEST.arff") as f:
-            total_df = total_df.append(a2p.load(f))
+            data, _ = loadarff(f)
+            total_df = total_df.append(pd.DataFrame(data))
 
         # Isolate the target column in the dataset
-        label_normal = 1
+        label_normal = b'1'
         new_columns = list(total_df.columns)
         new_columns[-1] = 'target'
         total_df.columns = new_columns
 
-        # Split the dataset in normal and abnormal examples
-        normal_df = total_df[total_df.target == str(label_normal)].drop(labels='target', axis=1)
-        anomaly_df = total_df[total_df.target != str(label_normal)].drop(labels='target', axis=1)
-
         if experiment == "features":
+            # Split the dataset in normal and abnormal examples
+            normal_df = total_df[total_df.target == label_normal].drop(labels='target', axis=1)
+            anomaly_df = total_df[total_df.target != label_normal].drop(labels='target', axis=1)
             if self.train:
                 df = normal_df
             else:
@@ -195,7 +197,8 @@ class ECG5000(Dataset):
 
         elif experiment == "examples":
             df = total_df.drop(labels='target', axis=1)
-            labels = [0 if int(label) == label_normal else 1 for label in total_df.target]
+            labels = [0 if label == label_normal else 1 for label in total_df.target]
+
         else:
             raise ValueError("Invalid experiment name.")
 
