@@ -152,9 +152,10 @@ def consistency_example_importance(args: DictConfig):
     results_df = pd.DataFrame(results_data, columns=["Explainer", "Type of Examples", "% Examples Selected",
                                                      "Similarity Rate"])
     results_df.to_csv(save_dir / "metrics.csv")
+    pal = sns.color_palette("colorblind")[2:4]
     sns.lineplot(data=results_df, x="% Examples Selected",
-                 y="Similarity Rate", hue="Explainer", style="Type of Examples", palette="colorblind")
-    plt.savefig(save_dir / "similarity_rates.pdf")
+                 y="Similarity Rate", hue="Explainer", style="Type of Examples", palette=pal)
+    plt.savefig(save_dir / "cifar10_similarity_rates.pdf")
 
 
 @hydra.main(config_name='simclr_config.yaml', config_path=str(Path.cwd()))
