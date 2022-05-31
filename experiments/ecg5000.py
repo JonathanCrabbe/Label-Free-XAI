@@ -9,8 +9,8 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from utils.datasets import ECG5000
 from torch.utils.data import DataLoader, random_split, Subset, RandomSampler
-from models.time_series import RecurrentAutoencoder, AutoencoderCNN
-from explanations.features import AuxiliaryFunction, attribute_auxiliary
+from models.time_series import RecurrentAutoencoder
+from explanations.features import attribute_auxiliary
 from explanations.examples import InfluenceFunctions, TracIn, SimplEx, NearestNeighbours
 from utils.metrics import similarity_rates
 from utils.feature_attribution import generate_tseries_masks
@@ -153,8 +153,6 @@ def consistency_example_importance(random_seed: int = 1, batch_size: int = 50, d
                                                          recursion_depth=recursion_depth)
         else:
             attribution = explainer.attribute_loader(device, subtrain_loader, subtest_loader)
-        #attribution = explainer.attribute(X_test[idx_subtest], idx_subtrain, recursion_depth=100,
-        #                                  learning_rate=autoencoder.lr)
         autoencoder.load_state_dict(torch.load(save_dir / (autoencoder.name + ".pt")), strict=False)
         sim_most, sim_least = similarity_rates(attribution, labels_subtrain, labels_subtest, n_top_list)
         results_list += [[str(explainer), "Most Important", 100 * frac, sim] for frac, sim in zip(frac_list, sim_most)]

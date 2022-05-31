@@ -4,22 +4,54 @@ from scipy.stats import entropy, spearmanr
 
 
 def off_diagonal_sum(mat: np.ndarray) -> np.ndarray:
+    """
+    Computes the sum of of-diagonal matrix elements
+    Args:
+        mat: matrix
+
+    Returns:
+        sum of the off diagonal elements of mat
+    """
     return np.sum(mat) - np.trace(mat)
 
 
 def pearson_saliency(saliency: np.ndarray) -> np.ndarray:
+    """
+    Computes the average Pearson correlation between different saliency maps
+    Args:
+        saliency: saliency maps stacked together (indexed by the first tensor dimension)
+
+    Returns:
+        Pearson correlation between saliency maps
+    """
     latent_dim = saliency.shape[1]
     corr = np.corrcoef(saliency.swapaxes(0, 1).reshape(latent_dim, -1))
     return off_diagonal_sum(corr) / (latent_dim * (latent_dim - 1))
 
 
 def spearman_saliency(saliency: np.ndarray) -> np.ndarray:
+    """
+       Computes the average Spearman correlation between different saliency maps
+       Args:
+           saliency: saliency maps stacked together (indexed by the first tensor dimension)
+
+       Returns:
+           Spearman correlation between saliency maps
+       """
     latent_dim = saliency.shape[1]
     corr = spearmanr(saliency.swapaxes(0, 1).reshape(latent_dim, -1), axis=1)[0]
     return off_diagonal_sum(corr) / (latent_dim * (latent_dim - 1))
 
 
 def cos_saliency(saliency: np.ndarray) -> np.ndarray:
+    """
+       Computes the average cosine between different saliency maps
+       Args:
+           saliency: saliency maps stacked together (indexed by the first tensor dimension)
+
+       Returns:
+           cosine  between saliency maps
+       """
     latent_dim = saliency.shape[1]
     cos_avg = np.ones((latent_dim, latent_dim))
     for dim1 in range(1, latent_dim):
@@ -34,6 +66,14 @@ def cos_saliency(saliency: np.ndarray) -> np.ndarray:
 
 
 def entropy_saliency(saliency: np.ndarray) -> np.ndarray:
+    """
+    Computes the entropy of different saliency maps
+    Args:
+        saliency: saliency maps stacked together (indexed by the first tensor dimension)
+
+    Returns:
+        Entropy between saliency maps
+    """
     latent_dim = saliency.shape[1]
     saliency_reshaped = np.reshape(saliency.swapaxes(1, -1), (-1, latent_dim))
     salient_pixels = saliency_reshaped.sum(1) > 0
@@ -43,6 +83,14 @@ def entropy_saliency(saliency: np.ndarray) -> np.ndarray:
 
 
 def count_activated_neurons(saliency: np.ndarray) -> np.ndarray:
+    """
+    Count the average number of neurons sensitive to a feature
+    Args:
+        saliency: saliency maps stacked together (indexed by the first tensor dimension)
+
+    Returns:
+        Average number of neurons sensitive to a feature
+    """
     latent_dim = saliency.shape[1]
     saliency_reshaped = np.reshape(saliency.swapaxes(1, -1), (-1, latent_dim))
     salient_pixels = saliency_reshaped.sum(1) > 0
@@ -52,20 +100,19 @@ def count_activated_neurons(saliency: np.ndarray) -> np.ndarray:
     return np.mean(n_activated_neurons)
 
 
-def similarity_rate(example_importance: torch.Tensor, labels_subtrain: torch.Tensor, labels_test: torch.Tensor,
-                    num_top: int = 5) -> list:
-    test_size, subtrain_size = example_importance.shape
-    most_important_examples = torch.topk(example_importance, k=num_top)[1]
-    similarity_rates = []
-    for n in range(test_size):
-        most_important_labels = labels_subtrain[most_important_examples[n]]
-        similarity_rates.append(torch.count_nonzero(most_important_labels == labels_test[n]).item()
-                                / num_top)
-    return similarity_rates
-
-
 def similarity_rates(example_importance: torch.Tensor, labels_subtrain: torch.Tensor, labels_test: torch.Tensor,
                      n_top_list: list = [1, 2, 5, 10, 20, 30, 40, 50]) -> tuple:
+    """
+    Computes the similarity rate metric (see paper)
+    Args:
+        example_importance: attribution for each example
+        labels_subtrain: labels of the train examples
+        labels_test: labels of the test examples
+        n_top_list: number of training examples to consider per test example
+
+    Returns:
+        Similary rates of most and least important examples for each element in n_to_list
+    """
     test_size, subtrain_size = example_importance.shape
     result_most = []
     result_least = []
@@ -82,21 +129,6 @@ def similarity_rates(example_importance: torch.Tensor, labels_subtrain: torch.Te
         result_most.append(np.mean(similarities_most))
         result_least.append(np.mean(similarities_least))
     return result_most, result_least
-
-
-def top_consistency(example_importances: torch.Tensor, num_top: int = 5) -> np.ndarray:
-    n_tasks, n_test, n_train = example_importances.shape
-    top_idx = torch.topk(torch.from_numpy(example_importances), num_top)[1]
-    consistency_matrix = np.ones((n_tasks, n_tasks))
-    for task1 in range(1, n_tasks):
-        for task2 in range(task1):
-            top_task1 = top_idx[task1].numpy()
-            top_task2 = top_idx[task2].numpy()
-            consistency_matrix[task1, task2] = np.sum(
-                [len(np.intersect1d(top_task1[id_test], top_task2[id_test])) for id_test in range(n_test)]
-            ) / (num_top*n_test)
-            consistency_matrix[task2, task1] = consistency_matrix[task1, task2]
-    return consistency_matrix
 
 
 def compute_metrics(data: np.ndarray, metrics: callable) -> list:

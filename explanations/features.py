@@ -21,23 +21,6 @@ class AuxiliaryFunction(Module):
             raise ValueError("The internal batch size should be a multiple of input_features.shape[0]")
 
 
-class IntegratedGradients(Attribution):
-    def __init__(self, forward_func: Module):
-        super().__init__(forward_func=forward_func)
-
-    def attribute(self, input: torch.Tensor, baselines: torch.Tensor, n_steps: int = 50) -> torch.Tensor:
-        latent_reps = self.forward_func(input).detach()
-        grads = torch.zeros(input.shape, device=input.device)
-        x_input = input.clone().requires_grad_()
-        for step in range(n_steps):
-            weight = step/n_steps
-            self.forward_func((1-weight)*baselines + weight*x_input).backward(gradient=latent_reps)
-            grads += x_input.grad
-            x_input.grad.data.zero_()
-        int_grads = (input-baselines)*grads/n_steps
-        return int_grads.cpu()
-
-
 def attribute_individual_dim(encoder: callable,  dim_latent: int, data_loader: torch.utils.data.DataLoader,
                              device: torch.device, attr_method: Attribution, baseline: torch.Tensor) -> np.ndarray:
     attributions = []

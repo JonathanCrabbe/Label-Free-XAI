@@ -7,8 +7,8 @@ import logging
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms, datasets
+from torch.utils.data import Dataset
+from torchvision import transforms
 from torchvision.datasets import MNIST, CIFAR10
 from zipfile import ZipFile
 from scipy.io.arff import loadarff

@@ -16,7 +16,7 @@ class InputPerturbation(abc.ABC):
     @abc.abstractmethod
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Calculates the perturbed
+        Calculates the perturbed input
         Parameters
         ----------
         x : torch.Tensor
@@ -25,6 +25,9 @@ class InputPerturbation(abc.ABC):
 
 
 class Identity(InputPerturbation, ABC):
+    """
+    Identity operator for autoencoders
+    """
     def __init__(self):
         super().__init__()
 
@@ -36,6 +39,9 @@ class Identity(InputPerturbation, ABC):
 
 
 class RandomNoise(InputPerturbation, ABC):
+    """
+    Gaussian noise perturbation for denoising autoencoders
+    """
     def __init__(self, noise_level: float = 0.3):
         super().__init__()
         self.noise_level = noise_level
@@ -48,6 +54,9 @@ class RandomNoise(InputPerturbation, ABC):
 
 
 class Mask(InputPerturbation, ABC):
+    """
+    Random binary mask for inpainting autoencoders
+    """
     def __init__(self, mask_proportion: float = 0.2, baseline: float = 0):
         super().__init__()
         self.baseline = baseline

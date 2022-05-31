@@ -14,7 +14,7 @@ from explanations.features import attribute_individual_dim
 from models.images import VAE, EncoderBurgess,\
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
-from utils.metrics import off_diagonal_sum, cos_saliency, entropy_saliency,\
+from utils.metrics import  cos_saliency, entropy_saliency,\
     count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency
 from utils.datasets import DSprites
 from utils.visualize import vae_box_plots, plot_vae_saliencies
@@ -102,39 +102,3 @@ if __name__ == "__main__":
     disvae_feature_importance(n_runs=args.n, batch_size=args.b, random_seed=args.r)
 
 
-"""
- baseline_image = torch.zeros((1, 1, W, W), device=device)
-        gradshap = GradientShap(encoder.mu)
-        attributions = []
-        latents = []
-
-        for image_batch, _ in test_loader:
-            image_batch = image_batch.to(device)
-            attributions_batch = []
-            latents.append(encoder.mu(image_batch).detach().cpu().numpy())
-            for dim in range(dim_latent):
-                attribution = gradshap.attribute(image_batch, baseline_image, target=dim).detach().cpu().numpy()
-                attributions_batch.append(np.reshape(attribution, (len(image_batch), 1, W, W)))
-            attributions.append(np.concatenate(attributions_batch, axis=1))
-        latents = np.concatenate(latents)
-        attributions = np.concatenate(attributions)
-        attributions = np.abs(np.expand_dims(latents, (2, 3)) * attributions)
-        corr = np.corrcoef(attributions.swapaxes(0, 1).reshape(dim_latent, -1))
-        metric = off_diagonal_sum(corr)/(dim_latent*(dim_latent-1))
-        activated_avg, activated_std = count_activated_neurons(attributions)
-        logging.info(f"Model  \t Beta {beta} \t Pearson Correlation {metric:.2g} \t"
-                     f" Active Neurons {activated_avg:.2g} +/- {activated_std:.2g} ")
-        cblind_palette = sns.color_palette("colorblind")
-        fig, axs = plt.subplots(ncols=dim_latent, nrows=n_plots, figsize=(4*dim_latent, 4*n_plots))
-        for example_id in range(n_plots):
-            max_saliency = np.max(attributions[example_id])
-            for dim in range(dim_latent):
-                sub_saliency = attributions[example_id, dim, :, :]
-                ax = axs[example_id, dim]
-                h = sns.heatmap(np.reshape(sub_saliency, (W, W)), linewidth=0, xticklabels=False, yticklabels=False,
-                                ax=ax, cmap=sns.light_palette(cblind_palette[dim], as_cmap=True), cbar=True,
-                                alpha=1, zorder=2, vmin=0, vmax=max_saliency)
-
-        plt.savefig(save_dir/f"tcvae_{beta}.pdf")
-
-"""

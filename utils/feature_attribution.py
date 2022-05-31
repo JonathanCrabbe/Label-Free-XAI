@@ -4,6 +4,16 @@ from itertools import product
 
 
 def generate_masks(attr: np.ndarray, mask_size: int) -> torch.Tensor:
+    """
+    Generates mask for images with feature importance scores
+    Args:
+        attr: feature importance scores
+        mask_size: number of pixels masked
+
+    Returns:
+        Mask hiding most important pixels
+
+    """
     dataset_size, n_chanels, H, W = attr.shape
     attr = torch.from_numpy(np.sum(np.abs(attr), axis=1, keepdims=True))  # Sum the attribution over the channels
     masks = torch.ones(attr.shape)
@@ -16,6 +26,16 @@ def generate_masks(attr: np.ndarray, mask_size: int) -> torch.Tensor:
 
 
 def generate_tseries_masks(attr: np.ndarray, mask_size: int) -> torch.Tensor:
+    """
+        Generates mask for time series with feature importance scores
+        Args:
+            attr: feature importance scores
+            mask_size: number of time steps masked
+
+        Returns:
+            Mask hiding most important time steps
+
+        """
     dataset_size, time_steps, n_chanels = attr.shape
     attr = torch.from_numpy(np.sum(np.abs(attr), axis=-1, keepdims=True))  # Sum the attribution over the channels
     masks = torch.ones(attr.shape)

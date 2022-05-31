@@ -6,7 +6,6 @@ import logging
 import pathlib
 import json
 import hydra
-import torch.backends.cudnn as cudnn
 from torch import nn
 from models.losses import BaseVAELoss
 from tqdm import tqdm
@@ -1005,101 +1004,5 @@ def log_density_gaussian(x: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor
     norm = - 0.5 * (math.log(2 * math.pi) + logvar)
     log_density = norm - 0.5 * ((x - mu) ** 2 * torch.exp(-logvar))
     return log_density
-
-
-def train_denoiser_epoch(encoder: EncoderMnist, decoder: DecoderMnist, device: torch.device,
-                         dataloader: torch.utils.data.DataLoader, loss_fn: callable, optimizer: torch.optim.Optimizer,
-                         noise_factor: float = 0.3):
-    # Set train mode for both the encoder and the decoder
-    encoder.train()
-    decoder.train()
-    train_loss = []
-    # Iterate the dataloader (we do not need the label values, this is unsupervised learning)
-    for image_batch, _ in dataloader:  # with "_" we just ignore the labels (the second element of the dataloader tuple)
-        # Move tensor to the proper device
-        image_noisy = image_batch + noise_factor * torch.randn(image_batch.shape)
-        image_noisy = image_noisy.to(device)
-        # Encode data
-        encoded_data = encoder(image_noisy)
-        # Decode data
-        decoded_data = decoder(encoded_data)
-        # Evaluate loss
-        loss = loss_fn(decoded_data, image_batch.to(device))
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        train_loss.append(loss.detach().cpu().numpy())
-    return np.mean(train_loss)
-
-
-def test_denoiser_epoch(encoder, decoder, device, dataloader, loss_fn):
-    # Set evaluation mode for encoder and decoder
-    encoder.eval()
-    decoder.eval()
-    with torch.no_grad():  # No need to track the gradients
-        # Define the lists to store the outputs for each batch
-        conc_out = []
-        conc_label = []
-        for image_batch, _ in dataloader:
-            # Move tensor to the proper device
-            image_batch = image_batch.to(device)
-            # Encode data
-            encoded_data = encoder(image_batch)
-            # Decode data
-            decoded_data = decoder(encoded_data)
-            conc_out.append(decoded_data.cpu())
-            conc_label.append(image_batch.cpu())
-        # Create a single tensor with all the values in the lists
-        conc_out = torch.cat(conc_out)
-        conc_label = torch.cat(conc_label)
-        # Evaluate global loss
-        val_loss = loss_fn(conc_out, conc_label)
-    return val_loss.data
-
-
-def train_classifier_epoch(classifier: ClassifierMnist, device: torch.device, dataloader: torch.utils.data.DataLoader,
-                           loss_fn: callable, optimizer: torch.optim.Optimizer):
-    # Set train mode for both the encoder and the decoder
-    classifier.train()
-    train_loss = []
-    # Iterate the dataloader (we do not need the label values, this is unsupervised learning)
-    for image_batch, label_batch in dataloader:
-        # Move tensor to the proper device
-        image_batch = image_batch.to(device)
-        # Predict Probabilities
-        proba_batch = classifier(image_batch)
-        # Evaluate loss
-        loss = loss_fn(proba_batch, label_batch.to(device))
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        train_loss.append(loss.detach().cpu().numpy())
-    return np.mean(train_loss)
-
-
-def test_classifier_epoch(classifier: ClassifierMnist, device: torch.device, dataloader: torch.utils.data.DataLoader,
-                          loss_fn: callable):
-    # Set evaluation mode for encoder and decoder
-    classifier.eval()
-    with torch.no_grad():  # No need to track the gradients
-        # Define the lists to store the outputs for each batch
-        conc_out = []
-        conc_label = []
-        for image_batch, label_batch in dataloader:
-            # Move tensor to the proper device
-            image_batch = image_batch.to(device)
-            # Predict probabilites
-            proba_batch = classifier(image_batch)
-            conc_out.append(proba_batch.cpu())
-            conc_label.append(label_batch.cpu())
-        # Create a single tensor with all the values in the lists
-        conc_out = torch.cat(conc_out)
-        conc_label = torch.cat(conc_label)
-        # Evaluate global loss
-        val_loss = loss_fn(conc_out, conc_label)
-    return val_loss.data
-
 
 

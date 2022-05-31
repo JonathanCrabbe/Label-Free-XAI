@@ -1,4 +1,3 @@
-import argparse
 import os
 import pandas as pd
 import torch
@@ -10,7 +9,6 @@ import matplotlib.pyplot as plt
 from models.images import SimCLR
 from omegaconf import DictConfig
 from pathlib import Path
-from torchvision.models import resnet18, resnet34
 from torchvision.datasets import CIFAR10
 from torchvision.transforms import ToTensor, GaussianBlur
 from torch.utils.data import DataLoader, Subset
@@ -18,8 +16,7 @@ from explanations.features import attribute_auxiliary
 from explanations.examples import SimplEx, NearestNeighbours
 from utils.feature_attribution import generate_masks
 from utils.metrics import similarity_rates
-from captum.attr import GradientShap, IntegratedGradients, DeepLift, Saliency
-from hydra import compose, initialize
+from captum.attr import GradientShap, IntegratedGradients,  Saliency
 
 
 def fit_model(args: DictConfig):

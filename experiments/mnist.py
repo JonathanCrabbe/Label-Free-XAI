@@ -10,18 +10,18 @@ import torchvision
 import itertools
 import argparse
 import csv
-from captum.attr import GradientShap, DeepLift, IntegratedGradients, Saliency
-from torch.utils.data import DataLoader, random_split, Subset, RandomSampler
+from captum.attr import GradientShap,  IntegratedGradients, Saliency
+from torch.utils.data import DataLoader,  Subset, RandomSampler
 from torchvision import transforms
 from scipy.stats import spearmanr
-from explanations.features import AuxiliaryFunction, attribute_auxiliary, attribute_individual_dim
+from explanations.features import attribute_auxiliary, attribute_individual_dim
 from explanations.examples import InfluenceFunctions, TracIn, SimplEx, NearestNeighbours
 from models.images import EncoderMnist, DecoderMnist, ClassifierMnist, AutoEncoderMnist, VAE, EncoderBurgess, \
     DecoderBurgess
 from models.losses import BetaHLoss, BtcvaeLoss
 from models.pretext import Identity, RandomNoise, Mask
-from utils.metrics import cos_saliency, entropy_saliency, similarity_rate, \
-    count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency, top_consistency, similarity_rates
+from utils.metrics import cos_saliency, entropy_saliency,  \
+    count_activated_neurons, pearson_saliency, compute_metrics, spearman_saliency,  similarity_rates
 from utils.visualize import plot_vae_saliencies, vae_box_plots, correlation_latex_table, plot_pretext_saliencies,\
 plot_pretext_top_example
 from utils.datasets import MaskedMNIST
