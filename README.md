@@ -3,7 +3,7 @@
 
 Code Author: Jonathan Crabbé ([jc2133@cam.ac.uk](mailto:jc2133@cam.ac.uk))
 
-This repository contains the implementation of LFXAI, a method to explain the latent
+This repository contains the implementation of LFXAI, a framework to explain the latent
 representations of unsupervised black-box models with the help of usual feature importance and example-based methods.
 For more details, please read our [ICML 2022 paper](https://arxiv.org/abs/2203.01928): 'Label-Free Explainability for Unsupervised Models'.
 
