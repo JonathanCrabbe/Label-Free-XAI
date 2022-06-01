@@ -95,10 +95,10 @@ def disvae_feature_importance(random_seed: int = 1, batch_size: int = 500, n_plo
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("-n", type=int, default=5)
-    parser.add_argument("-b", type=int, default=500)
-    parser.add_argument("-r", type=int, default=1)
+    parser.add_argument("--n_runs", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=500)
+    parser.add_argument("--seed", type=int, default=1)
     args = parser.parse_args()
-    disvae_feature_importance(n_runs=args.n, batch_size=args.b, random_seed=args.r)
+    disvae_feature_importance(n_runs=args.n_runs, batch_size=args.batch_size, random_seed=args.seed)
 
 

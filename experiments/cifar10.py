@@ -17,6 +17,7 @@ from explanations.examples import SimplEx, NearestNeighbours
 from utils.feature_attribution import generate_masks
 from utils.metrics import similarity_rates
 from captum.attr import GradientShap, IntegratedGradients,  Saliency
+from torchvision.models import resnet18, resnet34
 
 
 def fit_model(args: DictConfig):
