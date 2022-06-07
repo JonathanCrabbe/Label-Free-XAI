@@ -133,9 +133,14 @@ The resulting plots and data are saved [here](results/dsprites).
 If you use this code, please cite the associated paper:
 
 ```
-@inproceedings{Crabbe2022LFXAI,
-  title={{Label-Free Explainability for Unsupervised Models}},
-  author= {Crabb{\'e}, Jonathan and Van Der Schaar, Mihaela},
-  year={2022},
+@misc{Crabbe2022LFXAI,
+  doi = {10.48550/ARXIV.2203.01928},
+  url = {https://arxiv.org/abs/2203.01928},
+  author = {Crabbé, Jonathan and van der Schaar, Mihaela},
+  keywords = {Machine Learning (cs.LG), Artificial Intelligence (cs.AI), FOS: Computer and information sciences, FOS: Computer and information sciences},
+  title = {Label-Free Explainability for Unsupervised Models},
+  publisher = {arXiv},
+  year = {2022},
+  copyright = {Creative Commons Attribution 4.0 International}
 }
 ```
