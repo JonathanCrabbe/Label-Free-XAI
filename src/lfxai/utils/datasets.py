@@ -1,18 +1,19 @@
+import abc
+import logging
+import os
 import pathlib
 import subprocess
-import os
-import abc
-import wget
-import logging
+from zipfile import ZipFile
+
 import numpy as np
 import pandas as pd
 import torch
+import wget
+from PIL import Image
+from scipy.io.arff import loadarff
 from torch.utils.data import Dataset
 from torchvision import transforms
-from torchvision.datasets import MNIST, CIFAR10
-from zipfile import ZipFile
-from scipy.io.arff import loadarff
-from PIL import Image
+from torchvision.datasets import CIFAR10, MNIST
 
 """
 The code for DSprites is adapted from https://github.com/YannDubs/disentangling-vae/blob/master/utils/datasets.py
@@ -28,7 +29,8 @@ DATASETS = list(DATASETS_DICT.keys())
 
 class DisentangledDataset(Dataset, abc.ABC):
     """Base Class for disentangled VAE datasets.
-    Parameters
+
+    Parameters:
     ----------
     root : string
         Root directory of dataset.
@@ -43,7 +45,7 @@ class DisentangledDataset(Dataset, abc.ABC):
         self.logger = logger
 
         if not os.path.isdir(root):
-            self.logger.info("Downloading {} ...".format(str(type(self))))
+            self.logger.info(f"Downloading {str(type(self))} ...")
             self.download()
             self.logger.info("Finished Downloading.")
 
@@ -62,7 +64,7 @@ class DisentangledDataset(Dataset, abc.ABC):
 
     @abc.abstractmethod
     def download(self):
-        """Download the dataset. """
+        """Download the dataset."""
         pass
 
 
@@ -78,7 +80,8 @@ class DSprites(DisentangledDataset):
     -----
     - Link : https://github.com/deepmind/dsprites-dataset/
     - hard coded metadata because issue with python 3 loading of python 2
-    Parameters
+
+    Parameters:
     ----------
     root : string
         Root directory of dataset.
@@ -89,54 +92,150 @@ class DSprites(DisentangledDataset):
         with a constrained variational framework. In International Conference
         on Learning Representations.
     """
-    urls = {"train": "https://github.com/deepmind/dsprites-dataset/blob/master/dsprites_ndarray_co1sh3sc6or40x32y32_64x64.npz?raw=true"}
+
+    urls = {
+        "train": "https://github.com/deepmind/dsprites-dataset/blob/master/dsprites_ndarray_co1sh3sc6or40x32y32_64x64.npz?raw=true"
+    }
     files = {"train": "dsprite_train.npz"}
-    lat_names = ('shape', 'scale', 'orientation', 'posX', 'posY')
+    lat_names = ("shape", "scale", "orientation", "posX", "posY")
     lat_sizes = np.array([3, 6, 40, 32, 32])
     img_size = (1, 64, 64)
     background_color = COLOUR_BLACK
-    lat_values = {'posX': np.array([0., 0.03225806, 0.06451613, 0.09677419, 0.12903226,
-                                    0.16129032, 0.19354839, 0.22580645, 0.25806452,
-                                    0.29032258, 0.32258065, 0.35483871, 0.38709677,
-                                    0.41935484, 0.4516129, 0.48387097, 0.51612903,
-                                    0.5483871, 0.58064516, 0.61290323, 0.64516129,
-                                    0.67741935, 0.70967742, 0.74193548, 0.77419355,
-                                    0.80645161, 0.83870968, 0.87096774, 0.90322581,
-                                    0.93548387, 0.96774194, 1.]),
-                  'posY': np.array([0., 0.03225806, 0.06451613, 0.09677419, 0.12903226,
-                                    0.16129032, 0.19354839, 0.22580645, 0.25806452,
-                                    0.29032258, 0.32258065, 0.35483871, 0.38709677,
-                                    0.41935484, 0.4516129, 0.48387097, 0.51612903,
-                                    0.5483871, 0.58064516, 0.61290323, 0.64516129,
-                                    0.67741935, 0.70967742, 0.74193548, 0.77419355,
-                                    0.80645161, 0.83870968, 0.87096774, 0.90322581,
-                                    0.93548387, 0.96774194, 1.]),
-                  'scale': np.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.]),
-                  'orientation': np.array([0., 0.16110732, 0.32221463, 0.48332195,
-                                           0.64442926, 0.80553658, 0.96664389, 1.12775121,
-                                           1.28885852, 1.44996584, 1.61107316, 1.77218047,
-                                           1.93328779, 2.0943951, 2.25550242, 2.41660973,
-                                           2.57771705, 2.73882436, 2.89993168, 3.061039,
-                                           3.22214631, 3.38325363, 3.54436094, 3.70546826,
-                                           3.86657557, 4.02768289, 4.1887902, 4.34989752,
-                                           4.51100484, 4.67211215, 4.83321947, 4.99432678,
-                                           5.1554341, 5.31654141, 5.47764873, 5.63875604,
-                                           5.79986336, 5.96097068, 6.12207799, 6.28318531]),
-                  'shape': np.array([1., 2., 3.]),
-                  'color': np.array([1.])}
+    lat_values = {
+        "posX": np.array(
+            [
+                0.0,
+                0.03225806,
+                0.06451613,
+                0.09677419,
+                0.12903226,
+                0.16129032,
+                0.19354839,
+                0.22580645,
+                0.25806452,
+                0.29032258,
+                0.32258065,
+                0.35483871,
+                0.38709677,
+                0.41935484,
+                0.4516129,
+                0.48387097,
+                0.51612903,
+                0.5483871,
+                0.58064516,
+                0.61290323,
+                0.64516129,
+                0.67741935,
+                0.70967742,
+                0.74193548,
+                0.77419355,
+                0.80645161,
+                0.83870968,
+                0.87096774,
+                0.90322581,
+                0.93548387,
+                0.96774194,
+                1.0,
+            ]
+        ),
+        "posY": np.array(
+            [
+                0.0,
+                0.03225806,
+                0.06451613,
+                0.09677419,
+                0.12903226,
+                0.16129032,
+                0.19354839,
+                0.22580645,
+                0.25806452,
+                0.29032258,
+                0.32258065,
+                0.35483871,
+                0.38709677,
+                0.41935484,
+                0.4516129,
+                0.48387097,
+                0.51612903,
+                0.5483871,
+                0.58064516,
+                0.61290323,
+                0.64516129,
+                0.67741935,
+                0.70967742,
+                0.74193548,
+                0.77419355,
+                0.80645161,
+                0.83870968,
+                0.87096774,
+                0.90322581,
+                0.93548387,
+                0.96774194,
+                1.0,
+            ]
+        ),
+        "scale": np.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0]),
+        "orientation": np.array(
+            [
+                0.0,
+                0.16110732,
+                0.32221463,
+                0.48332195,
+                0.64442926,
+                0.80553658,
+                0.96664389,
+                1.12775121,
+                1.28885852,
+                1.44996584,
+                1.61107316,
+                1.77218047,
+                1.93328779,
+                2.0943951,
+                2.25550242,
+                2.41660973,
+                2.57771705,
+                2.73882436,
+                2.89993168,
+                3.061039,
+                3.22214631,
+                3.38325363,
+                3.54436094,
+                3.70546826,
+                3.86657557,
+                4.02768289,
+                4.1887902,
+                4.34989752,
+                4.51100484,
+                4.67211215,
+                4.83321947,
+                4.99432678,
+                5.1554341,
+                5.31654141,
+                5.47764873,
+                5.63875604,
+                5.79986336,
+                5.96097068,
+                6.12207799,
+                6.28318531,
+            ]
+        ),
+        "shape": np.array([1.0, 2.0, 3.0]),
+        "color": np.array([1.0]),
+    }
 
-    def __init__(self, root=os.path.join(DIR, '../data/dsprites/'), **kwargs):
+    def __init__(self, root=os.path.join(DIR, "../data/dsprites/"), **kwargs):
         super().__init__(root, [transforms.ToTensor()], **kwargs)
 
         dataset_zip = np.load(self.train_data)
-        self.imgs = dataset_zip['imgs']
-        self.lat_values = dataset_zip['latents_values']
+        self.imgs = dataset_zip["imgs"]
+        self.lat_values = dataset_zip["latents_values"]
 
     def download(self):
         """Download the dataset."""
         os.makedirs(self.root)
-        subprocess.check_call(["curl", "-L", type(self).urls["train"],
-                               "--output", self.train_data])
+        subprocess.check_call(
+            ["curl", "-L", type(self).urls["train"], "--output", self.train_data]
+        )
 
     def __getitem__(self, idx):
         """Get the image of `idx`
@@ -160,8 +259,13 @@ class DSprites(DisentangledDataset):
 
 
 class ECG5000(Dataset):
-    def __init__(self, dir: pathlib.Path, train: bool = True, random_seed: int = 42,
-                 experiment: str = "features"):
+    def __init__(
+        self,
+        dir: pathlib.Path,
+        train: bool = True,
+        random_seed: int = 42,
+        experiment: str = "features",
+    ):
         if experiment not in ["features", "examples"]:
             raise ValueError("The experiment name is either features or examples.")
         self.dir = dir
@@ -180,15 +284,19 @@ class ECG5000(Dataset):
             total_df = total_df.append(pd.DataFrame(data))
 
         # Isolate the target column in the dataset
-        label_normal = b'1'
+        label_normal = b"1"
         new_columns = list(total_df.columns)
-        new_columns[-1] = 'target'
+        new_columns[-1] = "target"
         total_df.columns = new_columns
 
         if experiment == "features":
             # Split the dataset in normal and abnormal examples
-            normal_df = total_df[total_df.target == label_normal].drop(labels='target', axis=1)
-            anomaly_df = total_df[total_df.target != label_normal].drop(labels='target', axis=1)
+            normal_df = total_df[total_df.target == label_normal].drop(
+                labels="target", axis=1
+            )
+            anomaly_df = total_df[total_df.target != label_normal].drop(
+                labels="target", axis=1
+            )
             if self.train:
                 df = normal_df
             else:
@@ -196,14 +304,16 @@ class ECG5000(Dataset):
             labels = [int(self.train) for _ in range(len(df))]
 
         elif experiment == "examples":
-            df = total_df.drop(labels='target', axis=1)
+            df = total_df.drop(labels="target", axis=1)
             labels = [0 if label == label_normal else 1 for label in total_df.target]
 
         else:
             raise ValueError("Invalid experiment name.")
 
         sequences = df.astype(np.float32).to_numpy().tolist()
-        sequences = [torch.tensor(sequence).unsqueeze(1).float() for sequence in sequences]
+        sequences = [
+            torch.tensor(sequence).unsqueeze(1).float() for sequence in sequences
+        ]
         self.sequences = sequences
         self.labels = labels
         self.n_seq, self.seq_len, self.n_features = torch.stack(sequences).shape
@@ -215,33 +325,37 @@ class ECG5000(Dataset):
         return self.sequences[idx], self.labels[idx]
 
     def download(self):
-        """Download the dataset. """
-        url = 'http://timeseriesclassification.com/Downloads/ECG5000.zip'
+        """Download the dataset."""
+        url = "http://timeseriesclassification.com/Downloads/ECG5000.zip"
         logging.info("Downloading the ECG5000 Dataset.")
         data_zip = self.dir / "ECG5000.zip"
         wget.download(url, str(data_zip))
-        with ZipFile(data_zip, 'r') as zip_ref:
+        with ZipFile(data_zip, "r") as zip_ref:
             zip_ref.extractall(self.dir)
         logging.info("Finished Downloading.")
 
 
 class MaskedMNIST(MNIST):
-    def __init__(self, root: str, train: bool = True, masks: torch.Tensor = None,):
+    def __init__(
+        self,
+        root: str,
+        train: bool = True,
+        masks: torch.Tensor = None,
+    ):
         super().__init__(root, train=train, download=True)
         self.masks = masks
 
     def __getitem__(self, index: int):
         image, target = super().__getitem__(index)
-        image = self.masks[index]*image
+        image = self.masks[index] * image
         return image, target
 
 
 class CIFAR10Pair(CIFAR10):
     """Generate mini-batche pairs on CIFAR10 training set."""
+
     def __getitem__(self, idx):
         img, target = self.data[idx], self.targets[idx]
         img = Image.fromarray(img)  # .convert('RGB')
         imgs = [self.transform(img), self.transform(img)]
         return torch.stack(imgs), target  # stack a positive pair
-
-
