@@ -141,6 +141,9 @@ cython_debug/
 .idea/*
 data/*
 experiments/results/*
+experiments/data/*
 results/*
 outputs/*
-
+tests/data/*
+tests/tmp/*
+generated

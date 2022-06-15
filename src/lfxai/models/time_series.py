@@ -1,10 +1,10 @@
+import logging
+import pathlib
+
 import numpy as np
 import torch
 import torch.nn as nn
-import logging
-import pathlib
 from tqdm import tqdm
-
 
 """
 Models inspired by:
@@ -18,16 +18,16 @@ class Encoder(nn.Module):
         self.seq_len, self.n_features = seq_len, n_features
         self.embedding_dim, self.hidden_dim = embedding_dim, 2 * embedding_dim
         self.rnn1 = nn.LSTM(
-          input_size=n_features,
-          hidden_size=self.hidden_dim,
-          num_layers=1,
-          batch_first=True
+            input_size=n_features,
+            hidden_size=self.hidden_dim,
+            num_layers=1,
+            batch_first=True,
         )
         self.rnn2 = nn.LSTM(
-          input_size=self.hidden_dim,
-          hidden_size=embedding_dim,
-          num_layers=1,
-          batch_first=True
+            input_size=self.hidden_dim,
+            hidden_size=embedding_dim,
+            num_layers=1,
+            batch_first=True,
         )
 
     def forward(self, x):
@@ -42,16 +42,13 @@ class Decoder(nn.Module):
         self.seq_len, self.input_dim = seq_len, input_dim
         self.hidden_dim, self.n_features = 2 * input_dim, n_features
         self.rnn1 = nn.LSTM(
-          input_size=input_dim,
-          hidden_size=input_dim,
-          num_layers=1,
-          batch_first=True
+            input_size=input_dim, hidden_size=input_dim, num_layers=1, batch_first=True
         )
         self.rnn2 = nn.LSTM(
-          input_size=input_dim,
-          hidden_size=self.hidden_dim,
-          num_layers=1,
-          batch_first=True
+            input_size=input_dim,
+            hidden_size=self.hidden_dim,
+            num_layers=1,
+            batch_first=True,
         )
         self.output_layer = nn.Linear(self.hidden_dim, n_features)
 
@@ -66,8 +63,14 @@ class Decoder(nn.Module):
 
 
 class RecurrentAutoencoder(nn.Module):
-    def __init__(self, seq_len: int, n_features: int, embedding_dim: int = 64, name: str = "model",
-                 loss_f: callable = nn.L1Loss(reduction='mean')):
+    def __init__(
+        self,
+        seq_len: int,
+        n_features: int,
+        embedding_dim: int = 64,
+        name: str = "model",
+        loss_f: callable = nn.L1Loss(reduction="mean"),
+    ):
         super(RecurrentAutoencoder, self).__init__()
         self.encoder = Encoder(seq_len, n_features, embedding_dim)
         self.decoder = Decoder(seq_len, n_features, embedding_dim)
@@ -81,8 +84,12 @@ class RecurrentAutoencoder(nn.Module):
         x = self.decoder(x)
         return x
 
-    def train_epoch(self, device: torch.device, dataloader: torch.utils.data.DataLoader,
-                    optimizer: torch.optim.Optimizer) -> np.ndarray:
+    def train_epoch(
+        self,
+        device: torch.device,
+        dataloader: torch.utils.data.DataLoader,
+        optimizer: torch.optim.Optimizer,
+    ) -> np.ndarray:
         self.train()
         train_loss = []
         for input_batch, _ in tqdm(dataloader, unit="batch", leave=False):
@@ -106,9 +113,16 @@ class RecurrentAutoencoder(nn.Module):
                 test_loss.append(loss.cpu().numpy())
         return np.mean(test_loss)
 
-    def fit(self, device: torch.device, train_loader: torch.utils.data.DataLoader,
-            test_loader: torch.utils.data.DataLoader, save_dir: pathlib.Path,
-            n_epoch: int = 30, patience: int = 10, checkpoint_interval: int = -1) -> None:
+    def fit(
+        self,
+        device: torch.device,
+        train_loader: torch.utils.data.DataLoader,
+        test_loader: torch.utils.data.DataLoader,
+        save_dir: pathlib.Path,
+        n_epoch: int = 30,
+        patience: int = 10,
+        checkpoint_interval: int = -1,
+    ) -> None:
         self.to(device)
         self.lr = 1e-03
         optim = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-05)
@@ -117,13 +131,17 @@ class RecurrentAutoencoder(nn.Module):
         for epoch in range(n_epoch):
             train_loss = self.train_epoch(device, train_loader, optim)
             test_loss = self.test_epoch(device, test_loader)
-            logging.info(f'Epoch {epoch + 1}/{n_epoch} \t '
-                         f'Train loss {train_loss:.3g} \t Test loss {test_loss:.3g} \t ')
+            logging.info(
+                f"Epoch {epoch + 1}/{n_epoch} \t "
+                f"Train loss {train_loss:.3g} \t Test loss {test_loss:.3g} \t "
+            )
             if test_loss >= best_test_loss:
                 waiting_epoch += 1
-                logging.info(f'No improvement over the best epoch \t Patience {waiting_epoch} / {patience}')
+                logging.info(
+                    f"No improvement over the best epoch \t Patience {waiting_epoch} / {patience}"
+                )
             else:
-                logging.info(f'Saving the model in {save_dir}')
+                logging.info(f"Saving the model in {save_dir}")
                 self.cpu()
                 self.save(save_dir)
                 self.to(device)
@@ -131,18 +149,20 @@ class RecurrentAutoencoder(nn.Module):
                 waiting_epoch = 0
             if checkpoint_interval > 0 and epoch % checkpoint_interval == 0:
                 n_checkpoint = 1 + epoch // checkpoint_interval
-                logging.info(f'Saving checkpoint {n_checkpoint} in {save_dir}')
-                path_to_checkpoint = save_dir / f"{self.name}_checkpoint{n_checkpoint}.pt"
+                logging.info(f"Saving checkpoint {n_checkpoint} in {save_dir}")
+                path_to_checkpoint = (
+                    save_dir / f"{self.name}_checkpoint{n_checkpoint}.pt"
+                )
                 torch.save(self.state_dict(), path_to_checkpoint)
                 self.checkpoints_files.append(path_to_checkpoint)
             if waiting_epoch == patience:
-                logging.info(f'Early stopping activated')
+                logging.info("Early stopping activated")
                 break
 
     def save(self, directory: pathlib.Path) -> None:
         """
         Save a model and corresponding metadata.
-        Parameters
+        Parameters:
         ----------
         directory : pathlib.Path
             Path to the directory where to save the data.
@@ -162,13 +182,11 @@ class EncoderCNN(nn.Module):
             nn.BatchNorm1d(16),
             nn.ReLU(True),
             nn.Conv1d(16, 32, 3, stride=2, padding=0),
-            nn.ReLU(True)
+            nn.ReLU(True),
         )
         self.flatten = nn.Flatten(start_dim=1)
         self.encoder_lin = nn.Sequential(
-            nn.Linear(544, 128),
-            nn.ReLU(True),
-            nn.Linear(128, encoded_space_dim)
+            nn.Linear(544, 128), nn.ReLU(True), nn.Linear(128, encoded_space_dim)
         )
         self.encoded_space_dim = encoded_space_dim
 
@@ -184,9 +202,7 @@ class DecoderCNN(nn.Module):
     def __init__(self, encoded_space_dim):
         super().__init__()
         self.decoder_lin = nn.Sequential(
-            nn.Linear(encoded_space_dim, 128),
-            nn.ReLU(True),
-            nn.Linear(128, 544)
+            nn.Linear(encoded_space_dim, 128), nn.ReLU(True), nn.Linear(128, 544)
         )
         self.unflatten = nn.Unflatten(dim=1, unflattened_size=(32, 17))
         self.decoder_conv = nn.Sequential(
@@ -196,7 +212,7 @@ class DecoderCNN(nn.Module):
             nn.ConvTranspose1d(16, 8, 3, stride=2, padding=1, output_padding=1),
             nn.BatchNorm1d(8),
             nn.ReLU(True),
-            nn.ConvTranspose1d(8, 1, 3, stride=2, padding=1, output_padding=1)
+            nn.ConvTranspose1d(8, 1, 3, stride=2, padding=1, output_padding=1),
         )
 
     def forward(self, x):
@@ -207,7 +223,12 @@ class DecoderCNN(nn.Module):
 
 
 class AutoencoderCNN(nn.Module):
-    def __init__(self, embedding_dim: int = 64, name: str = "model", loss_f: callable = nn.L1Loss(reduction='mean')):
+    def __init__(
+        self,
+        embedding_dim: int = 64,
+        name: str = "model",
+        loss_f: callable = nn.L1Loss(reduction="mean"),
+    ):
         super(AutoencoderCNN, self).__init__()
         self.encoder = EncoderCNN(embedding_dim)
         self.decoder = DecoderCNN(embedding_dim)
@@ -221,8 +242,12 @@ class AutoencoderCNN(nn.Module):
         x = self.decoder(x)
         return x
 
-    def train_epoch(self, device: torch.device, dataloader: torch.utils.data.DataLoader,
-                    optimizer: torch.optim.Optimizer) -> np.ndarray:
+    def train_epoch(
+        self,
+        device: torch.device,
+        dataloader: torch.utils.data.DataLoader,
+        optimizer: torch.optim.Optimizer,
+    ) -> np.ndarray:
         self.train()
         train_loss = []
         for input_batch, _ in tqdm(dataloader, unit="batch", leave=False):
@@ -246,9 +271,16 @@ class AutoencoderCNN(nn.Module):
                 test_loss.append(loss.cpu().numpy())
         return np.mean(test_loss)
 
-    def fit(self, device: torch.device, train_loader: torch.utils.data.DataLoader,
-            test_loader: torch.utils.data.DataLoader, save_dir: pathlib.Path,
-            n_epoch: int = 30, patience: int = 10, checkpoint_interval: int = -1) -> None:
+    def fit(
+        self,
+        device: torch.device,
+        train_loader: torch.utils.data.DataLoader,
+        test_loader: torch.utils.data.DataLoader,
+        save_dir: pathlib.Path,
+        n_epoch: int = 30,
+        patience: int = 10,
+        checkpoint_interval: int = -1,
+    ) -> None:
         self.to(device)
         self.lr = 1e-03
         optim = torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=1e-05)
@@ -257,13 +289,17 @@ class AutoencoderCNN(nn.Module):
         for epoch in range(n_epoch):
             train_loss = self.train_epoch(device, train_loader, optim)
             test_loss = self.test_epoch(device, test_loader)
-            logging.info(f'Epoch {epoch + 1}/{n_epoch} \t '
-                         f'Train loss {train_loss:.3g} \t Test loss {test_loss:.3g} \t ')
+            logging.info(
+                f"Epoch {epoch + 1}/{n_epoch} \t "
+                f"Train loss {train_loss:.3g} \t Test loss {test_loss:.3g} \t "
+            )
             if test_loss >= best_test_loss:
                 waiting_epoch += 1
-                logging.info(f'No improvement over the best epoch \t Patience {waiting_epoch} / {patience}')
+                logging.info(
+                    f"No improvement over the best epoch \t Patience {waiting_epoch} / {patience}"
+                )
             else:
-                logging.info(f'Saving the model in {save_dir}')
+                logging.info(f"Saving the model in {save_dir}")
                 self.cpu()
                 self.save(save_dir)
                 self.to(device)
@@ -271,18 +307,20 @@ class AutoencoderCNN(nn.Module):
                 waiting_epoch = 0
             if checkpoint_interval > 0 and epoch % checkpoint_interval == 0:
                 n_checkpoint = 1 + epoch // checkpoint_interval
-                logging.info(f'Saving checkpoint {n_checkpoint} in {save_dir}')
-                path_to_checkpoint = save_dir / f"{self.name}_checkpoint{n_checkpoint}.pt"
+                logging.info(f"Saving checkpoint {n_checkpoint} in {save_dir}")
+                path_to_checkpoint = (
+                    save_dir / f"{self.name}_checkpoint{n_checkpoint}.pt"
+                )
                 torch.save(self.state_dict(), path_to_checkpoint)
                 self.checkpoints_files.append(path_to_checkpoint)
             if waiting_epoch == patience:
-                logging.info(f'Early stopping activated')
+                logging.info("Early stopping activated")
                 break
 
     def save(self, directory: pathlib.Path) -> None:
         """
         Save a model and corresponding metadata.
-        Parameters
+        Parameters:
         ----------
         directory : pathlib.Path
             Path to the directory where to save the data.

@@ -1,5 +1,9 @@
 # Label-Free XAI
-![image](illustration.png "Label-Free Explainability")
+[![Tests](https://github.com/vanderschaarlab/Label-Free-XAI/actions/workflows/test.yml/badge.svg)](https://github.com/vanderschaarlab/Label-Free-XAI/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.png)](https://opensource.org/licenses/MIT)
+[![Documentation Status](https://readthedocs.org/projects/lfxai/badge/?version=latest)](https://lfxai.readthedocs.io/en/latest/?badge=latest)
+
+![image](https://github.com/vanderschaarlab/Label-Free-XAI/raw/main/docs/illustration.png "Label-Free Explainability")
 
 Code Author: Jonathan Crabbé ([jc2133@cam.ac.uk](mailto:jc2133@cam.ac.uk))
 
@@ -8,17 +12,25 @@ representations of unsupervised black-box models with the help of usual feature 
 For more details, please read our [ICML 2022 paper](https://arxiv.org/abs/2203.01928): 'Label-Free Explainability for Unsupervised Models'.
 
 ## 1. Installation
+From PyPI
+```bash
+pip install lfxai
+```
+
+From repository:
 1. Clone the repository
 2. Create a new virtual environment with Python 3.8
 3. Run the following command from the repository folder:
-    ```shell
-    pip install -r requirements.txt #install requirements
-    ```
+
+```shell
+pip install .
+```
+
 When the packages are installed, you are ready to explain unsupervised models.
 
 ## 2. Toy example
 
-Bellow, you can find a toy demonstration where we compute label-free feature and example importance 
+Bellow, you can find a toy demonstration where we compute label-free feature and example importance
 with a MNIST autoencoder. The relevant code can be found in the folder
 [explanations](explanations).
 
@@ -29,11 +41,12 @@ from torchvision.datasets import MNIST
 from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 from torch.nn import MSELoss
-from models.images import AutoEncoderMnist, EncoderMnist, DecoderMnist
-from models.pretext import Identity
 from captum.attr import IntegratedGradients
-from explanations.features import attribute_auxiliary
-from explanations.examples import SimplEx
+
+from lfxai.models.images import AutoEncoderMnist, EncoderMnist, DecoderMnist
+from lfxai.models.pretext import Identity
+from lfxai.explanations.features import attribute_auxiliary
+from lfxai.explanations.examples import SimplEx
 
 # Select torch device
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -50,14 +63,14 @@ test_loader = DataLoader(test_dataset, batch_size=100, shuffle=False)
 # Get a model
 encoder = EncoderMnist(encoded_space_dim=10)
 decoder = DecoderMnist(encoded_space_dim=10)
-model = AutoEncoderMnist(encoder, decoder, latent_dim=10, input_pert=Identity()) 
+model = AutoEncoderMnist(encoder, decoder, latent_dim=10, input_pert=Identity())
 model.to(device)
 
 # Get label-free feature importance
 baseline = torch.zeros((1, 1, 28, 28)).to(device) # black image as baseline
-attr_method = IntegratedGradients(model) 
-feature_importance = attribute_auxiliary(encoder, test_loader, 
-                                         device, attr_method, baseline) 
+attr_method = IntegratedGradients(model)
+feature_importance = attribute_auxiliary(encoder, test_loader,
+                                         device, attr_method, baseline)
 
 # Get label-free example importance
 train_subset = Subset(train_dataset, indices=list(range(500))) # Limit the number of training examples
@@ -68,12 +81,12 @@ example_importance = attr_method.attribute_loader(device, train_subloader, test_
 
 
 
-## 3. Reproducing the paper results 
+## 3. Reproducing the paper results
 
 ### MNIST experiments
-Run the following script  
+In the `experiments` folder, run the following script
 ```shell
-python -m experiments.mnist --name experiment_name
+python -m mnist --name experiment_name
 ```
 where experiment_name can take the following values:
 
@@ -89,9 +102,9 @@ where experiment_name can take the following values:
 The resulting plots and data are saved [here](results/mnist).
 
 ### ECG5000 experiments
-Run the following script  
+Run the following script
 ```shell
-python -m experiments.ecg5000 --name experiment_name
+python -m ecg5000 --name experiment_name
 ```
 where experiment_name can take the following values:
 
@@ -105,12 +118,12 @@ where experiment_name can take the following values:
 The resulting plots and data are saved [here](results/ecg5000).
 
 ### CIFAR10 experiments
-Run the following script  
+Run the following script
 ```shell
-python -m experiments.cifar10 
+python -m cifar10
 ```
-The experiment can be selected by changing the experiment_name 
-parameter in [this file](simclr_config.yaml). 
+The experiment can be selected by changing the experiment_name
+parameter in [this file](simclr_config.yaml).
 The parameter can take the following values:
 
 | experiment_name      | description                                                                  |
@@ -122,9 +135,9 @@ The parameter can take the following values:
 
 The resulting plots and data are saved [here](results/cifar10).
 ### dSprites experiment
-Run the following script  
+Run the following script
 ```shell
-python -m experiments.dsprites
+python -m dsprites
 ```
 The experiment needs several hours to run since several VAEs are trained.
 The resulting plots and data are saved [here](results/dsprites).

@@ -1,8 +1,13 @@
 import abc
+
 import torch
 from torch.nn import functional as F
-from utils.math import (log_density_gaussian, log_importance_weight_matrix,
-                        matrix_log_density_gaussian)
+
+from lfxai.utils.math import (
+    log_density_gaussian,
+    log_importance_weight_matrix,
+    matrix_log_density_gaussian,
+)
 
 LOSSES = ["betaH", "btcvae"]
 RECON_DIST = ["bernoulli", "laplace", "gaussian"]
@@ -10,52 +15,31 @@ RECON_DIST = ["bernoulli", "laplace", "gaussian"]
 
 def get_loss_f(loss_name, **kwargs_parse):
     """Return the correct loss function given the argparse arguments."""
-    kwargs_all = dict(rec_dist=kwargs_parse["rec_dist"],
-                      steps_anneal=kwargs_parse["reg_anneal"])
+    kwargs_all = dict(
+        rec_dist=kwargs_parse["rec_dist"], steps_anneal=kwargs_parse["reg_anneal"]
+    )
     if loss_name == "betaH":
         return BetaHLoss(beta=kwargs_parse["betaH_B"], **kwargs_all)
 
     elif loss_name == "btcvae":
-        return BtcvaeLoss(kwargs_parse["n_data"],
-                          alpha=kwargs_parse["btcvae_A"],
-                          beta=kwargs_parse["btcvae_B"],
-                          gamma=kwargs_parse["btcvae_G"],
-                          **kwargs_all)
+        return BtcvaeLoss(
+            kwargs_parse["n_data"],
+            alpha=kwargs_parse["btcvae_A"],
+            beta=kwargs_parse["btcvae_B"],
+            gamma=kwargs_parse["btcvae_G"],
+            **kwargs_all,
+        )
     else:
         assert loss_name not in LOSSES
-        raise ValueError("Uknown loss : {}".format(loss_name))
-
-
-class SupConLoss(torch.nn.Module):
-    """Supervised Contrastive Learning: https://arxiv.org/pdf/2004.11362.pdf."""
-    def __init__(self, temperature=0.07):
-        super(SupConLoss, self).__init__()
-        self.temperature = temperature
-
-    def forward(self, latents: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        """Compute contrastive loss.
-        Args:
-            latents: hidden vector of shape [batch_size, dim_latent].
-            labels: ground truth of shape [batch_size].
-        Returns:
-            A loss scalar.
-        """
-        batch_size, dim_latent = latents.shape
-        labels = labels.contiguous().view(-1, 1)
-        if labels.shape[0] != batch_size:
-            raise ValueError('Num of labels does not match num of features')
-        count_class1 = torch.count_nonzero(labels)
-        count_class0 = batch_size - count_class1
-        P = count_class1*labels + count_class0*(1-labels)
-        loss = 0
-        return loss
+        raise ValueError(f"Uknown loss : {loss_name}")
 
 
 class BaseVAELoss(abc.ABC):
     """
     Base class for losses.
-    Parameters
-    ----------
+
+    Parameters:
+    -----------
     record_loss_every: int, optional
         Every how many steps to recorsd the loss.
     rec_dist: {"bernoulli", "gaussian", "laplace"}, optional
@@ -79,13 +63,12 @@ class BaseVAELoss(abc.ABC):
         Returns: Name of the loss
         """
 
-
     @abc.abstractmethod
     def __call__(self, data, recon_data, latent_dist, is_train, storer, **kwargs):
-        """
-        Calculates loss for a batch of data.
-        Parameters
-        ----------
+        """Calculates loss for a batch of data.
+
+        Parameters:
+        -----------
         data : torch.Tensor
             Input data (e.g. batch of images). Shape : (batch_size, n_chan,
             height, width).
@@ -117,14 +100,16 @@ class BaseVAELoss(abc.ABC):
 class BetaHLoss(BaseVAELoss):
     """
     Compute the Beta-VAE loss as in [1]
-    Parameters
-    ----------
+
+    Parameters:
+    -----------
     beta : float, optional
         Weight of the kl divergence.
     kwargs:
         Additional arguments for `BaseLoss`, e.g. rec_dist`.
-    References
-    ----------
+
+    References:
+    -----------
         [1] Higgins, Irina, et al. "beta-vae: Learning basic visual concepts with
         a constrained variational framework." (2016).
     """
@@ -136,16 +121,19 @@ class BetaHLoss(BaseVAELoss):
     def __call__(self, data, recon_data, latent_dist, is_train, storer, **kwargs):
         storer = self._pre_call(is_train, storer)
 
-        rec_loss = _reconstruction_loss(data, recon_data,
-                                        storer=storer,
-                                        distribution=self.rec_dist)
+        rec_loss = _reconstruction_loss(
+            data, recon_data, storer=storer, distribution=self.rec_dist
+        )
         kl_loss = _kl_normal_loss(*latent_dist, storer)
-        anneal_reg = (linear_annealing(0, 1, self.n_train_steps, self.steps_anneal)
-                      if is_train else 1)
+        anneal_reg = (
+            linear_annealing(0, 1, self.n_train_steps, self.steps_anneal)
+            if is_train
+            else 1
+        )
         loss = rec_loss + anneal_reg * (self.beta * kl_loss)
 
         if storer is not None:
-            storer['loss'].append(loss.item())
+            storer["loss"].append(loss.item())
         return loss
 
     def __str__(self):
@@ -156,8 +144,9 @@ class BtcvaeLoss(BaseVAELoss):
     """
     Compute the decomposed KL loss with either minibatch weighted sampling or
     minibatch stratified sampling according to [1]
-    Parameters
-    ----------
+
+    Parameters:
+    -----------
     n_data: int
         Number of data in the training set
     alpha : float
@@ -171,13 +160,14 @@ class BtcvaeLoss(BaseVAELoss):
         weighted sampling.
     kwargs:
         Additional arguments for `BaseLoss`, e.g. rec_dist`.
-    References
-    ----------
+
+    References:
+    -----------
        [1] Chen, Tian Qi, et al. "Isolating sources of disentanglement in variational
        autoencoders." Advances in Neural Information Processing Systems. 2018.
     """
 
-    def __init__(self, n_data, alpha=1., beta=6., gamma=1., is_mss=True, **kwargs):
+    def __init__(self, n_data, alpha=1.0, beta=6.0, gamma=1.0, is_mss=True, **kwargs):
         super().__init__(**kwargs)
         self.n_data = n_data
         self.beta = beta
@@ -185,18 +175,18 @@ class BtcvaeLoss(BaseVAELoss):
         self.gamma = gamma
         self.is_mss = is_mss  # minibatch stratified sampling
 
-    def __call__(self, data, recon_batch, latent_dist, is_train, storer,
-                 latent_sample=None):
+    def __call__(
+        self, data, recon_batch, latent_dist, is_train, storer, latent_sample=None
+    ):
         storer = self._pre_call(is_train, storer)
         batch_size, latent_dim = latent_sample.shape
 
-        rec_loss = _reconstruction_loss(data, recon_batch,
-                                        storer=storer,
-                                        distribution=self.rec_dist)
-        log_pz, log_qz, log_prod_qzi, log_q_zCx = _get_log_pz_qz_prodzi_qzCx(latent_sample,
-                                                                             latent_dist,
-                                                                             self.n_data,
-                                                                             is_mss=self.is_mss)
+        rec_loss = _reconstruction_loss(
+            data, recon_batch, storer=storer, distribution=self.rec_dist
+        )
+        log_pz, log_qz, log_prod_qzi, log_q_zCx = _get_log_pz_qz_prodzi_qzCx(
+            latent_sample, latent_dist, self.n_data, is_mss=self.is_mss
+        )
         # I[z;x] = KL[q(z,x)||q(x)q(z)] = E_x[KL[q(z|x)||q(z)]]
         mi_loss = (log_q_zCx - log_qz).mean()
         # TC[z] = KL[q(z)||\prod_i z_i]
@@ -204,19 +194,24 @@ class BtcvaeLoss(BaseVAELoss):
         # dw_kl_loss is KL[q(z)||p(z)] instead of usual KL[q(z|x)||p(z))]
         dw_kl_loss = (log_prod_qzi - log_pz).mean()
 
-        anneal_reg = (linear_annealing(0, 1, self.n_train_steps, self.steps_anneal)
-                      if is_train else 1)
+        anneal_reg = (
+            linear_annealing(0, 1, self.n_train_steps, self.steps_anneal)
+            if is_train
+            else 1
+        )
 
         # total loss
-        loss = rec_loss + (self.alpha * mi_loss +
-                           self.beta * tc_loss +
-                           anneal_reg * self.gamma * dw_kl_loss)
+        loss = rec_loss + (
+            self.alpha * mi_loss
+            + self.beta * tc_loss
+            + anneal_reg * self.gamma * dw_kl_loss
+        )
 
         if storer is not None:
-            storer['loss'].append(loss.item())
-            storer['mi_loss'].append(mi_loss.item())
-            storer['tc_loss'].append(tc_loss.item())
-            storer['dw_kl_loss'].append(dw_kl_loss.item())
+            storer["loss"].append(loss.item())
+            storer["mi_loss"].append(mi_loss.item())
+            storer["tc_loss"].append(tc_loss.item())
+            storer["dw_kl_loss"].append(dw_kl_loss.item())
             # computing this for storing and comparaison purposes
             _ = _kl_normal_loss(*latent_dist, storer)
 
@@ -230,8 +225,9 @@ def _reconstruction_loss(data, recon_data, distribution="bernoulli", storer=None
     """
     Calculates the per image reconstruction loss for a batch of data. I.e. negative
     log likelihood.
-    Parameters
-    ----------
+
+    Parameters:
+    -----------
     data : torch.Tensor
         Input data (e.g. batch of images). Shape : (batch_size, n_chan,
         height, width).
@@ -247,14 +243,15 @@ def _reconstruction_loss(data, recon_data, distribution="bernoulli", storer=None
         distribution corresponds to L1 solves partially the issue of MSE.
     storer : dict
         Dictionary in which to store important variables for vizualisation.
-    Returns
-    -------
+
+    Returns:
+    --------
     loss : torch.Tensor
         Per image cross entropy (i.e. normalized per batch but not pixel and
         channel)
     """
     batch_size, n_chan, height, width = recon_data.size()
-    is_colored = n_chan == 3
+    n_chan == 3
 
     if distribution == "bernoulli":
         loss = F.binary_cross_entropy(recon_data, data, reduction="sum")
@@ -265,26 +262,28 @@ def _reconstruction_loss(data, recon_data, distribution="bernoulli", storer=None
         # loss in [0,255] space but normalized by 255 to not be too big but
         # multiply by 255 and divide 255, is the same as not doing anything for L1
         loss = F.l1_loss(recon_data, data, reduction="sum")
-        loss = loss * 3  # emperical value to give similar values than bernoulli => use same hyperparam
+        loss = (
+            loss * 3
+        )  # emperical value to give similar values than bernoulli => use same hyperparam
         loss = loss * (loss != 0)  # masking to avoid nan
     else:
         assert distribution not in RECON_DIST
-        raise ValueError("Unkown distribution: {}".format(distribution))
+        raise ValueError(f"Unkown distribution: {distribution}")
 
     loss = loss / batch_size
 
     if storer is not None:
-        storer['recon_loss'].append(loss.item())
+        storer["recon_loss"].append(loss.item())
 
     return loss
 
 
 def _kl_normal_loss(mean, logvar, storer=None):
-    """
-    Calculates the KL divergence between a normal distribution
+    """Calculates the KL divergence between a normal distribution
     with diagonal covariance and a unit normal distribution.
-    Parameters
-    ----------
+
+    Parameters:
+    -----------
     mean : torch.Tensor
         Mean of the normal distribution. Shape (batch_size, latent_dim) where
         D is dimension of distribution.
@@ -300,25 +299,26 @@ def _kl_normal_loss(mean, logvar, storer=None):
     total_kl = latent_kl.sum()
 
     if storer is not None:
-        storer['kl_loss'].append(total_kl.item())
+        storer["kl_loss"].append(total_kl.item())
         for i in range(latent_dim):
-            storer['kl_loss_' + str(i)].append(latent_kl[i].item())
+            storer["kl_loss_" + str(i)].append(latent_kl[i].item())
 
     return total_kl
 
 
 def _permute_dims(latent_sample):
-    """
-    Implementation of Algorithm 1 in ref [1]. Randomly permutes the sample from
+    """Implementation of Algorithm 1 in ref [1]. Randomly permutes the sample from
     q(z) (latent_dist) across the batch for each of the latent dimensions (mean
     and log_var).
-    Parameters
-    ----------
+
+    Parameters:
+    -----------
     latent_sample: torch.Tensor
         sample from the latent dimension using the reparameterisation trick
         shape : (batch_size, latent_dim).
-    References
-    ----------
+
+    References:
+    -----------
         [1] Kim, Hyunjik, and Andriy Mnih. "Disentangling by factorising."
         arXiv preprint arXiv:1802.05983 (2018).
     """
@@ -359,11 +359,12 @@ def _get_log_pz_qz_prodzi_qzCx(latent_sample, latent_dist, n_data, is_mss=True):
 
     if is_mss:
         # use stratification
-        log_iw_mat = log_importance_weight_matrix(batch_size, n_data).to(latent_sample.device)
+        log_iw_mat = log_importance_weight_matrix(batch_size, n_data).to(
+            latent_sample.device
+        )
         mat_log_qz = mat_log_qz + log_iw_mat.view(batch_size, batch_size, 1)
 
     log_qz = torch.logsumexp(mat_log_qz.sum(2), dim=1, keepdim=False)
     log_prod_qzi = torch.logsumexp(mat_log_qz, dim=1, keepdim=False).sum(1)
 
     return log_pz, log_qz, log_prod_qzi, log_q_zCx
-
