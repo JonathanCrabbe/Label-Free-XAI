@@ -146,14 +146,20 @@ The resulting plots and data are saved [here](results/dsprites).
 If you use this code, please cite the associated paper:
 
 ```
-@misc{Crabbe2022LFXAI,
-  doi = {10.48550/ARXIV.2203.01928},
-  url = {https://arxiv.org/abs/2203.01928},
-  author = {Crabbé, Jonathan and van der Schaar, Mihaela},
-  keywords = {Machine Learning (cs.LG), Artificial Intelligence (cs.AI), FOS: Computer and information sciences, FOS: Computer and information sciences},
-  title = {Label-Free Explainability for Unsupervised Models},
-  publisher = {arXiv},
-  year = {2022},
-  copyright = {Creative Commons Attribution 4.0 International}
+
+@InProceedings{pmlr-v162-crabbe22a,
+  title = 	 {Label-Free Explainability for Unsupervised Models},
+  author =       {Crabb{\'e}, Jonathan and van der Schaar, Mihaela},
+  booktitle = 	 {Proceedings of the 39th International Conference on Machine Learning},
+  pages = 	 {4391--4420},
+  year = 	 {2022},
+  editor = 	 {Chaudhuri, Kamalika and Jegelka, Stefanie and Song, Le and Szepesvari, Csaba and Niu, Gang and Sabato, Sivan},
+  volume = 	 {162},
+  series = 	 {Proceedings of Machine Learning Research},
+  month = 	 {17--23 Jul},
+  publisher =    {PMLR},
+  pdf = 	 {https://proceedings.mlr.press/v162/crabbe22a/crabbe22a.pdf},
+  url = 	 {https://proceedings.mlr.press/v162/crabbe22a.html},
+  abstract = 	 {Unsupervised black-box models are challenging to interpret. Indeed, most existing explainability methods require labels to select which component(s) of the black-box’s output to interpret. In the absence of labels, black-box outputs often are representation vectors whose components do not correspond to any meaningful quantity. Hence, choosing which component(s) to interpret in a label-free unsupervised/self-supervised setting is an important, yet unsolved problem. To bridge this gap in the literature, we introduce two crucial extensions of post-hoc explanation techniques: (1) label-free feature importance and (2) label-free example importance that respectively highlight influential features and training examples for a black-box to construct representations at inference time. We demonstrate that our extensions can be successfully implemented as simple wrappers around many existing feature and example importance methods. We illustrate the utility of our label-free explainability paradigm through a qualitative and quantitative comparison of representation spaces learned by various autoencoders trained on distinct unsupervised tasks.}
 }
 ```
